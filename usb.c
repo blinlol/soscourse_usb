@@ -6,10 +6,11 @@
 
 // ПОТОМ ПЕРЕНЕСТИ в pci.h строка 53
 #define XHCI_VADDR       0x7010000000
-#define XHCI_DEQUE_VADDR 0x7011000000
+#define XHCI_RING_DEQUE_VADDR 0x7011000000
 
 //used already
 #define XHCI_MAX_MAP_MEM 0x4000
+#define XHCI_RING_DEQUE_MEM 4096 //why 4096?
 //not used yet
 #define INTERRUPTER_REGISTER_SET_COUNT 256
 #define EVENT_RING_TABLE_SIZE 256
@@ -21,6 +22,7 @@
 struct XhciController {
     struct PciDevice *pcidev;
     volatile uint8_t *mmio_base_addr;
+    volatile uint8_t *buffer;
 };
 static struct XhciController xhci;
 
@@ -124,24 +126,44 @@ void xhci_register_init(struct XhciController *ctl) {
     //run_regs->int_reg_set[0].erstba = (uint64_t)event_ring_segment_table;*/
 }
 
+static int
+xhci_alloc_queues(struct XhciController *ctl) {
+    ctl->buffer = (void *)XHCI_RING_DEQUE_VADDR;
+
+    int r = sys_alloc_region(0, (void*)(ctl->buffer), XHCI_RING_DEQUE_MEM, PROT_RW | PROT_CD);
+    if (r < 0)
+        panic("deque alloc failed");
+
+    DEBUG2("XHCI page buffer allocated with pages:");
+    volatile char *page = (volatile char *)ctl->buffer;
+    *page = 0;
+    DEBUG2("    va=%p, pa=%lx", page, get_phys_addr((char *)page));
+    return 0;
+}
 
 void xhci_init() {
     struct XhciController *ctl = &xhci;
     struct PciDevice *pcidevice = find_pci_dev(6, 1);
-    //int err;
+    int err;
     if (pcidevice == NULL)
         panic("NVMe device not found\n");
     ctl->pcidev = pcidevice;
     if ( xhci_map(ctl) )
         panic("XHCI device not found\n");
     xhci_register_init(ctl);
+    err = xhci_alloc_queues(ctl);
+    if (err)
+        panic("Unable to allocate XHCI deque\n");
     // ПРОДОЛЖИТЬ см nvme_init
 }
+
+extern volatile int pci_initial;
 
 void
 umain(int argc, char **argv) {
     cprintf("***********************INIT USB***********************\n");
     // уже написана в fs/pci.c
+    //TO DO: исправить то что сделано в pmap.c
     pci_init(argv);
     // делаем похожей на nvme
     xhci_init();
