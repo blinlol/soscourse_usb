@@ -3,6 +3,9 @@
 #include <inc/lib.h>
 #include "fs/pci.h"
 
+#include "usb/context.h"
+#include "usb/registers.h"
+
 
 // ПОТОМ ПЕРЕНЕСТИ в pci.h строка 53
 #define XHCI_VADDR       0x7010000000
@@ -25,43 +28,6 @@ struct XhciController {
     volatile uint8_t *buffer;
 };
 static struct XhciController xhci;
-
-// это сама работа с xhci
-struct CapabilityRegisters {
-    volatile uint8_t caplength;
-    volatile uint8_t rsvd0;
-    volatile uint16_t hciversion;
-    volatile uint32_t hcsparams[3];
-    volatile uint32_t hccparams1;
-    volatile uint32_t dboff;
-    volatile uint32_t rtsoff;
-    volatile uint32_t hccparams2;
-} * cap_regs;
-struct OperationalRegisters {
-    volatile uint32_t usbcmd;
-    volatile uint32_t usbsts;
-    volatile uint32_t pagesize;
-    volatile uint32_t rsvdz0;
-    volatile uint32_t dnctrl;
-    volatile uint64_t crcr;
-    volatile uint32_t rsvdz1[4];
-    volatile uint64_t dcbaap;
-    volatile uint32_t config;
-    volatile uint32_t rsvdz2[241];
-} * oper_regs;
-struct InterrupterRegisterSet {
-    volatile uint32_t iman;
-    volatile uint32_t imod;
-    volatile uint32_t erstsz;
-    volatile uint32_t rsvd;
-    volatile uint64_t erstba;
-    volatile uint64_t erdp;
-};
-struct RuntimeRegisters {
-    volatile uint32_t mfindex;
-    volatile uint32_t rsvdz[7];
-    volatile struct InterrupterRegisterSet int_reg_set[INTERRUPTER_REGISTER_SET_COUNT];
-} * run_regs;
 struct EventRingTableEntry {
     volatile uint64_t ring_segment_base_address;
     volatile uint8_t ring_segment_size;
@@ -87,26 +53,26 @@ volatile uint8_t * event_ring_deque;
 
 
 void print_usb_memory_region() {
-    cprintf("Capability Registers:\n");
-    cprintf("CAPLENGTH: %d\n", cap_regs->caplength);
-    cprintf("HCIVERSION: %x\n", cap_regs->hciversion);
-    cprintf("HCSPARAMS1: %x\n", cap_regs->hcsparams[0]);
-    cprintf("HCSPARAMS2: %x\n", cap_regs->hcsparams[1]);
-    cprintf("HCSPARAMS3: %x\n", cap_regs->hcsparams[2]);
-    cprintf("HCCPARAMS1: %x\n", cap_regs->hccparams1);
-    cprintf("DBOFF: %x\n", cap_regs->dboff);
-    cprintf("RTSOFF: %x\n", cap_regs->rtsoff);
-    cprintf("HCCPARAMS2: %x\n", cap_regs->hccparams2);
-    cprintf("\n");
-    cprintf("Operational Registers:\n");
-    cprintf("USBCMD: %x\n", oper_regs->usbcmd);
-    cprintf("USBSTS: %x\n", oper_regs->usbsts);
-    cprintf("PAGESIZE: %x\n", oper_regs->pagesize);
-    cprintf("DNCTRL: %x\n", oper_regs->dnctrl);
-    cprintf("CRCR: %lx\n", oper_regs->crcr);
-    cprintf("DCBAAP: %lx\n", oper_regs->dcbaap);
-    cprintf("CONFIG: %x\n", oper_regs->config);
-    cprintf("\n");
+    // cprintf("Capability Registers:\n");
+    // cprintf("CAPLENGTH: %d\n", cap_regs->caplength);
+    // cprintf("HCIVERSION: %x\n", cap_regs->hciversion);
+    // cprintf("HCSPARAMS1: %x\n", cap_regs->hcsparams1);
+    // cprintf("HCSPARAMS2: %x\n", cap_regs->hcsparams2);
+    // cprintf("HCSPARAMS3: %x\n", cap_regs->hcsparams3);
+    // cprintf("HCCPARAMS1: %x\n", cap_regs->hccparams1);
+    // cprintf("DBOFF: %x\n", cap_regs->dboff);
+    // cprintf("RTSOFF: %x\n", cap_regs->rtsoff);
+    // cprintf("HCCPARAMS2: %x\n", cap_regs->hccparams2);
+    // cprintf("\n");
+    // cprintf("Operational Registers:\n");
+    // cprintf("USBCMD: %x\n", oper_regs->usbcmd);
+    // cprintf("USBSTS: %x\n", oper_regs->usbsts);
+    // cprintf("PAGESIZE: %x\n", oper_regs->pagesize);
+    // cprintf("DNCTRL: %x\n", oper_regs->dnctrl);
+    // cprintf("CRCR: %lx\n", oper_regs->crcr);
+    // cprintf("DCBAAP: %lx\n", oper_regs->dcbaap);
+    // cprintf("CONFIG: %x\n", oper_regs->config);
+    // cprintf("\n");
 //     for (int i = 0; i < 8; i++) {
 //         volatile uint32_t portsc = get_portsc(i+1);
 //         if ((portsc & (1 << 0)) >> 0) {
@@ -284,10 +250,10 @@ xhci_alloc_queues(struct XhciController *ctl) {
     if (r < 0)
         panic("deque alloc failed");
 
-    DEBUG2("XHCI page buffer allocated with pages:");
+    DEBUG("XHCI page buffer allocated with pages:");
     volatile char *page = (volatile char *)ctl->buffer;
     *page = 0;
-    DEBUG2("    va=%p, pa=%lx", page, get_phys_addr((char *)page));
+    DEBUG("    va=%p, pa=%lx", page, get_phys_addr((char *)page));
     return 0;
 }
 
@@ -310,7 +276,6 @@ void xhci_init() {
 }
 
 extern volatile int pci_initial;
->>>>>>> origin/main
 
 void
 umain(int argc, char **argv) {

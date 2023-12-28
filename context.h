@@ -2,8 +2,9 @@
 #define ALIGNED(n) __attribute__((aligned(n)))
 
 
+
 struct SlotContext{
-    uint16_t route_string: 20;
+    uint32_t route_string: 20;
     uint8_t speed: 4;
     uint8_t rzvdz0: 1;
     bool mtt: 1;
@@ -18,7 +19,7 @@ struct SlotContext{
     uint8_t parent_port_number;
     uint8_t ttt: 2;
     uint8_t rzvdz1: 4;
-    uint16_t interrupter_target: 10:
+    uint16_t interrupter_target: 10;
 
     uint8_t usb_device_address;
     uint32_t rsvdz2: 19;
@@ -57,6 +58,10 @@ struct EndpointContext {
     uint32_t rsvdo[3];
 } PACKED;
 
+// 6.2.1
+struct EndpointContext DeviceContext[32];
+
+
 
 struct StreamContext {
     bool dcs: 1;
@@ -77,3 +82,8 @@ struct InputControlContext {
     uint8_t alternate_setting;
     uint8_t rsvdz0;
 };
+
+// 6.2.5
+// 0's element is InputControlContext
+// remaining same as in DeviceContext
+struct EndpointContext InputContext[33];
