@@ -1,6 +1,8 @@
 #include <inc/x86.h>
 #include <inc/string.h>
+#include <inc/lib.h>
 #include "fs/pci.h"
+
 
 // ПОТОМ ПЕРЕНЕСТИ в pci.h строка 53
 #define XHCI_VADDR       0x7010000000
@@ -81,7 +83,7 @@ volatile uint8_t * event_ring_segment_base_address;
 volatile uint8_t * event_ring_deque;
 
 
-int xhci_map(XhciController *ctl) {
+int xhci_map(struct XhciController *ctl) {
     //готово, не тестировано
     ctl->mmio_base_addr = (volatile uint8_t *)XHCI_VADDR;
     size_t size = get_bar_size(ctl->pcidev, 0);
@@ -93,9 +95,9 @@ int xhci_map(XhciController *ctl) {
     return 0;
 }
 
-void xhci_memory_init(XhciController *ctl) {
+void xhci_register_init(struct XhciController *ctl) {
     // ДАЛЕЕ переделать
-    cap_regs = (struct CapabilityRegisters *)memory_space_ptr;
+    /*cap_regs = (struct CapabilityRegisters *)memory_space_ptr;
     oper_regs = ((void *)memory_space_ptr + cap_regs->caplength);
     run_regs = ((void *)memory_space_ptr + (cap_regs->rtsoff & 0xFFFFFFF0));
     doorbells = ((void *)memory_space_ptr + cap_regs->dboff);
@@ -119,19 +121,20 @@ void xhci_memory_init(XhciController *ctl) {
     }
     event_ring_segment_table[0].ring_segment_size = EVENT_RING_SEGMENT_SIZE;
     event_ring_deque = event_ring_segment_base_address;
-    //run_regs->int_reg_set[0].erstba = (uint64_t)event_ring_segment_table;
+    //run_regs->int_reg_set[0].erstba = (uint64_t)event_ring_segment_table;*/
 }
 
 
 void xhci_init() {
+    struct XhciController *ctl = &xhci;
     struct PciDevice *pcidevice = find_pci_dev(6, 1);
-    int err;
+    //int err;
     if (pcidevice == NULL)
         panic("NVMe device not found\n");
-    xhci.pcidev = pcidevice;
+    ctl->pcidev = pcidevice;
     if ( xhci_map(ctl) )
-        return 1;
-    xhci_memory_init();
+        panic("XHCI device not found\n");
+    xhci_register_init(ctl);
     // ПРОДОЛЖИТЬ см nvme_init
 }
 
