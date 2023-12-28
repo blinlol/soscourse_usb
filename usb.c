@@ -2,16 +2,23 @@
 #include <inc/string.h>
 #include "fs/pci.h"
 
+// ПОТОМ ПЕРЕНЕСТИ в pci.h строка 53
+#define XHCI_VADDR       0x7010000000
+#define XHCI_DEQUE_VADDR 0x7011000000
+
+//used already
+#define XHCI_MAX_MAP_MEM 0x4000
+//not used yet
 #define INTERRUPTER_REGISTER_SET_COUNT 256
 #define EVENT_RING_TABLE_SIZE 256
 #define EVENT_RING_SEGMENT_SIZE 128
-#define XHCI_MEMORY_SPACE_BUFFER_SIZE 16384
 #define COMMAND_RING_DEQUE_SIZE 4096
 #define DCBAAP_SIZE 128
 
 //аналогично nvme
 struct XhciController {
     struct PciDevice *pcidev;
+    volatile uint8_t *mmio_base_addr;
 };
 static struct XhciController xhci;
 
@@ -59,14 +66,13 @@ struct EventRingTableEntry {
 struct Doorbell {
     volatile uint32_t dbreg[256];
 } * doorbells;
-
+// not used yet
 int controller_not_ready() {
     return (oper_regs->usbsts & (1 << 11)) >> 11;
 }
 volatile uint8_t * memory_space_ptr;
 volatile uint8_t * dcbaap;
 volatile uint8_t * device_context[32];
-
 volatile uint8_t * dcbaap;
 volatile uint8_t * command_ring_deque;
 volatile struct EventRingTableEntry * event_ring_segment_table;
@@ -74,21 +80,20 @@ volatile uint32_t event_ring_segment_table_size;
 volatile uint8_t * event_ring_segment_base_address;
 volatile uint8_t * event_ring_deque;
 
-int xhci_map(struct NvmeController *ctl) {
-    // ПЕРЕДЕЛАТЬ
-    ctl->mmio_base_addr = (volatile uint8_t *)NVME_VADDR;
+
+int xhci_map(XhciController *ctl) {
+    //готово, не тестировано
+    ctl->mmio_base_addr = (volatile uint8_t *)XHCI_VADDR;
     size_t size = get_bar_size(ctl->pcidev, 0);
-    size = size > NVME_MAX_MAP_MEM ? NVME_MAX_MAP_MEM : size;
+    size = size > XHCI_MAX_MAP_MEM ? XHCI_MAX_MAP_MEM : size;
     int res = sys_map_physical_region(get_bar_address(ctl->pcidev, 0), CURENVID, (void *)ctl->mmio_base_addr, size, PROT_RW | PROT_CD);
+    // добавить коды ошибок
     if (res)
         return 1;
     return 0;
 }
 
-
-void xhci_memory_init() {
-    if ( xhci_map() )
-        return 1;
+void xhci_memory_init(XhciController *ctl) {
     // ДАЛЕЕ переделать
     cap_regs = (struct CapabilityRegisters *)memory_space_ptr;
     oper_regs = ((void *)memory_space_ptr + cap_regs->caplength);
@@ -119,13 +124,15 @@ void xhci_memory_init() {
 
 
 void xhci_init() {
-    struct PciDevice *pcidevice = find_pci_dev(1, 8);
+    struct PciDevice *pcidevice = find_pci_dev(6, 1);
     int err;
     if (pcidevice == NULL)
         panic("NVMe device not found\n");
-    xhci.pcidev = find_pci_dev(6, 1);
+    xhci.pcidev = pcidevice;
+    if ( xhci_map(ctl) )
+        return 1;
     xhci_memory_init();
-    // ПРОДОЛЖИТЬ см 
+    // ПРОДОЛЖИТЬ см nvme_init
 }
 
 void
