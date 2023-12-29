@@ -1,6 +1,9 @@
 #define PACKED     __attribute__((packed))
 #define ALIGNED(n) __attribute__((aligned(n)))
 
+#define ZERO_MASK_64(digit) (~((uint64_t)(digit)))
+#define ZERO_MASK_32(digit) (~((uint32_t)(digit)))
+
 // это сама работа с xhci
 struct CapabilityRegisters {
     volatile uint8_t caplength;
@@ -19,14 +22,14 @@ struct CapabilityRegisters {
     volatile uint32_t hcsparams2;
     volatile uint32_t hcsparams3;
     volatile uint32_t hccparams1;
-    uint8_t rsvd1 : 2;
-    volatile uint32_t dboff: 30;
-    uint8_t rsvd2 : 5;
-    volatile uint32_t rtsoff: 27;
+    volatile uint32_t dboff; // last 2 bits are reserved
+    volatile uint32_t rtsoff; // last 5 bits are reserved
     volatile uint32_t hccparams2;
+    // and other inf
 } PACKED * cap_regs;
 
-
+#define DBOFF_MASK  (~((uint32_t)0b11))
+#define RTSOFF_MASK (~((uint32_t)0b11))
 
 struct OperationalRegisters {
     volatile uint32_t usbcmd;
@@ -79,15 +82,8 @@ struct InterrupterRegisterSet {
         uint16_t rsvd;
     } erstsz;
     volatile uint32_t rsvd;
-    volatile struct {
-        uint8_t rsvd: 6;
-        uint64_t erstba: 58;
-    } PACKED erstba;
-    volatile struct {
-        uint8_t desi: 3;
-        bool ehb: 1;
-        uint64_t erdp: 60;
-    } PACKED erdp;
+    uint64_t erstba; //58 bits for address, 6 reserved
+    uint64_t erdp; //60 bits address, 1 - ehb, 3 - desi
 };
 
 #define IMAN_IP 0
