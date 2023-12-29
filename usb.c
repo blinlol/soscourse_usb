@@ -215,56 +215,104 @@ int xhci_map(struct XhciController *ctl) {
     return 0;
 }
 
-void xhci_register_init(struct XhciController *ctl) {
+int xhci_register_init(struct XhciController *ctl) {
     uint8_t *memory_space_ptr = (uint8_t*)ctl->mmio_base_addr;
     cap_regs = (struct CapabilityRegisters *)memory_space_ptr;
+    cprintf("^%p\n",cap_regs);
     oper_regs = ((void *)memory_space_ptr + cap_regs->caplength);
+    cprintf("^%p\n",oper_regs);
     run_regs = ((void *)memory_space_ptr + (cap_regs->rtsoff & RTSOFF_MASK) );
+    cprintf("^%p\n",run_regs);
     doorbells = ((void *)memory_space_ptr + (cap_regs->dboff & DBOFF_MASK));
+    cprintf("^%p\n",doorbells);
     while(controller_not_ready()) {}
+
+    // small check: read-only registers can't be rewrited
+//    cprintf("!! %d\n",oper_regs->pagesize);
+//    oper_regs->pagesize = 0xFFFFFFFF;
+//    cprintf("!! %d\n",oper_regs->pagesize);
     
     //! Физический адрес взят рандомно
 
     //этому 2048 с выравниванием по 6
-    oper_regs->dcbaap = XHCI_DATA_STRUCT_PADDR;
+    oper_regs->dcbaap = XHCI_DATA_STRUCT_PADDR & (oper_regs->dcbaap & ZERO_MASK_64(0b111111));
     dcbaap = (uint8_t*)XHCI_DATA_STRUCT_VADDR;
     uintptr_t pa = oper_regs->dcbaap & ZERO_MASK_64(0b111111);
     int res = sys_map_physical_region(pa, CURENVID, (void*)dcbaap, PAGESIZE, PROT_RW | PROT_CD);
     if (res)
-        return;
+        return 1;
+    cprintf("^%p\n",dcbaap);
 
     //этому 4 Kib
-    oper_regs->crcr = oper_regs->dcbaap + PAGESIZE;
+    oper_regs->crcr = ((oper_regs->dcbaap & ZERO_MASK_64(0b111111)) | (oper_regs->crcr & 0b111111)) + PAGESIZE;
     command_ring_deque = (uint8_t*)(XHCI_DATA_STRUCT_VADDR + PAGESIZE);
     pa = oper_regs->crcr & ZERO_MASK_64(0b111111);
     res = sys_map_physical_region(pa, CURENVID, (void*)command_ring_deque, PAGESIZE, PROT_RW | PROT_CD);
     if (res)
-        return;
+        return 1;
+    cprintf("^%p\n",command_ring_deque);
     
     //этому 512 Kib:
     event_ring_segment_table = (struct EventRingTableEntry*)(command_ring_deque + PAGESIZE);
-    pa = (oper_regs->crcr + PAGESIZE);
+    pa = pa + PAGESIZE;
     run_regs->int_reg_set[0].erdp = pa | (run_regs->int_reg_set[0].erdp & 0b111111);
     res = sys_map_physical_region(pa, CURENVID, (void*)event_ring_segment_table, 512*1024, PROT_RW | PROT_CD);
     if (res)
-        return;
+        return 1;
+    cprintf("^%p\n",event_ring_segment_table);
 
     event_ring_segment_table[0].ring_segment_size = EVENT_RING_SEGMENT_SIZE;
 //    event_ring_deque = event_ring_segment_base_address;
 // надо?
 
-    cprintf("^%p\n",ctl->mmio_base_addr);
-    cprintf("^%p\n",oper_regs);
-    cprintf("^%p\n",run_regs);
-    cprintf("^%p\n",doorbells);
-    cprintf("^%p\n",dcbaap);
-    cprintf("^%p\n",command_ring_deque);
-    cprintf("^%p\n",event_ring_segment_table);
+    return 0;
 }
 
-static int
-xhci_alloc_structures(struct XhciController *ctl) {
-    return 0;
+void xhci_settings_init() {
+    volatile uint32_t config = oper_regs->config;
+    config = config | 0x8;               // setting number of device slots equal 8
+    oper_regs->config = config;
+
+    volatile uint32_t usbcmd = oper_regs->usbcmd;
+    usbcmd = usbcmd | 0x1;
+    oper_regs->usbcmd = usbcmd;         // setting Run/Stop register to Run state 
+
+    volatile uint16_t xecp_offset = (cap_regs->hccparams1 >> 16);
+    cprintf("hccparams1 - %x\n", cap_regs->hccparams1);
+    volatile uint32_t * xecp_pointer = (uint32_t *)((uint8_t *)cap_regs + (xecp_offset << 2)); 
+    volatile uint32_t xecp = xecp_pointer[0];
+    xecp = xecp | (1 << 24);
+    cprintf("xecp - %x\n",xecp);
+    cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x400));
+    cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x410));
+    cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x420));
+    cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x430));
+    //*(uint32_t*)(((uint8_t*)(oper_regs))+400) |= 1 << 4;
+    //cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x400));
+}
+
+
+
+
+
+
+
+
+void wait_for_command_ring_not_running() {
+    while ((oper_regs->crcr & (1 << 3)) == 0) {}
+}
+
+void wait_for_command_ring_running() {
+    while (oper_regs->crcr & (1 << 3)) { cprintf("-\n"); }
+}
+
+void xhci_slots_init() {
+    //uint8_t max_slots = cap_regs->hcsparams[0] & 0xFF;
+    for (int i = 0; i < 1000000000; i++) {}
+    
+    cprintf("xhci_slots_init() started\n");
+    wait_for_command_ring_not_running();
+    cprintf("xhci_slots_init() exited\n");
 }
 
 void xhci_init() {
@@ -276,11 +324,12 @@ void xhci_init() {
     ctl->pcidev = pcidevice;
     if (xhci_map(ctl) )
         panic("XHCI device not found\n");
-    xhci_register_init(ctl);
     print_usb_memory_region();
-    if (xhci_alloc_structures(ctl))
+    if (xhci_register_init(ctl))
         panic("Unable to allocate XHCI structures\n");
-    // ПРОДОЛЖИТЬ см nvme_init
+    // ПРОДОЛЖИТЬ см nvme_init А ЛУЧШЕ дедовский usb
+    xhci_settings_init();
+    xhci_slots_init();
 }
 
 extern volatile int pci_initial;
@@ -289,9 +338,7 @@ void
 umain(int argc, char **argv) {
     cprintf("***********************INIT USB***********************\n");
     // уже написана в fs/pci.c
-
     //TO DO: исправить то что сделано в pmap.c
-    pci_init(argv);
     // делаем похожей на nvme
     pci_init(argv);
     xhci_init();
