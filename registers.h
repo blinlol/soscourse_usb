@@ -72,17 +72,17 @@ struct PortRegisterSet {
 
 
 struct InterrupterRegisterSet {
-    volatile uint32_t iman;
+    volatile uint32_t iman; //RW, only 0 and 1 bits
     volatile struct {
-        uint16_t interval;
-        uint16_t counter;
+        uint16_t interval; //time, default=1msec
+        uint16_t counter; //counter to run on deque
     } imod;
     volatile struct{
-        uint16_t erstsz;
+        uint16_t erstsz; //max deque size, see capability->HCSPARAMS2->ERNST
         uint16_t rsvd;
     } erstsz;
     volatile uint32_t rsvd;
-    uint64_t erstba; //58 bits for address, 6 reserved
+    uint64_t erstba; //58 bits for address, 6 reserved //pointer to EVENT RING SEGMENT TABLE
     uint64_t erdp; //60 bits address, 1 - ehb, 3 - desi
 };
 

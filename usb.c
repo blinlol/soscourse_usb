@@ -8,8 +8,10 @@
 
 
 // ПОТОМ ПЕРЕНЕСТИ в pci.h строка 53
-#define XHCI_DATA_STRUCT_VADDR 0x7010000000
-#define XHCI_DATA_STRUCT_SIZE (1024*1024) // 2 Mib
+#define XHCI_BASE_ADDR         0x7010000000
+#define XHCI_DATA_STRUCT_VADDR 0x7011000000
+#define XHCI_DATA_STRUCT_PADDR 0x810000000
+#define PAGESIZE 4096
 
 //used already
 #define XHCI_MAX_MAP_MEM 0x4000
@@ -202,9 +204,9 @@ void print_usb_memory_region() {
 
 int xhci_map(struct XhciController *ctl) {
     //ПЕРЕДЕЛАН МАП ПАМЯТИ
-    ctl->mmio_base_addr = (uint8_t *)get_bar_address(ctl->pcidev,0);
+    ctl->mmio_base_addr = (uint8_t*)XHCI_BASE_ADDR;
     size_t size = get_bar_size(ctl->pcidev, 0);
-//    cprintf("SIZE AND ADDR: %p %d\n",ctl->mmio_base_addr,size);
+    //cprintf("SIZE AND ADDR: %p %ld %lx\n",ctl->mmio_base_addr,size,get_bar_address(ctl->pcidev, 0));
     size = size > XHCI_MAX_MAP_MEM ? XHCI_MAX_MAP_MEM : size;
     int res = sys_map_physical_region(get_bar_address(ctl->pcidev, 0), CURENVID, (void *)ctl->mmio_base_addr, size, PROT_RW | PROT_CD);
     // добавить коды ошибок
@@ -214,52 +216,50 @@ int xhci_map(struct XhciController *ctl) {
 }
 
 void xhci_register_init(struct XhciController *ctl) {
-    // ДАЛЕЕ переделать
-    cprintf("^%p\n",ctl->mmio_base_addr);
     uint8_t *memory_space_ptr = (uint8_t*)ctl->mmio_base_addr;
     cap_regs = (struct CapabilityRegisters *)memory_space_ptr;
     oper_regs = ((void *)memory_space_ptr + cap_regs->caplength);
-    cprintf("^%p\n",oper_regs);
     run_regs = ((void *)memory_space_ptr + (cap_regs->rtsoff & RTSOFF_MASK) );
-    cprintf("^%p\n",run_regs);
     doorbells = ((void *)memory_space_ptr + (cap_regs->dboff & DBOFF_MASK));
-    cprintf("^%p\n",doorbells);
     while(controller_not_ready()) {}
     
-    //int res = sys_map_physical_region(, CURENVID, (void *)ctl->mmio_base_addr, size, PROT_RW | PROT_CD);
-    //if (res)
-    //    return 1;
+    //! Физический адрес взят рандомно
 
     //этому 2048 с выравниванием по 6
-    cprintf("^%lx\n",(oper_regs->dcbaap) & ZERO_MASK_64(0b111111) );
-    //этому
-    cprintf("^%lx\n",(oper_regs->crcr) & ZERO_MASK_64(0b111111) );
-    //этому
-    cprintf("^%lx\n",(run_regs->int_reg_set[0].erdp) & ZERO_MASK_64(0b111111) );
-    // это ещё interrupts СОМНЕНИЕ в структуре
-    for (int i = 0; i < 10; i++) {
-        cprintf("^%ld %ld\n",
-        run_regs->int_reg_set[i].erstba & ZERO_MASK_64(0b111111),
-        run_regs->int_reg_set[i].erdp & ZERO_MASK_64(0b1111) );
-    }
+    oper_regs->dcbaap = XHCI_DATA_STRUCT_PADDR;
+    dcbaap = (uint8_t*)XHCI_DATA_STRUCT_VADDR;
+    uintptr_t pa = oper_regs->dcbaap & ZERO_MASK_64(0b111111);
+    int res = sys_map_physical_region(pa, CURENVID, (void*)dcbaap, PAGESIZE, PROT_RW | PROT_CD);
+    if (res)
+        return;
+
+    //этому 4 Kib
+    oper_regs->crcr = oper_regs->dcbaap + PAGESIZE;
+    command_ring_deque = (uint8_t*)(XHCI_DATA_STRUCT_VADDR + PAGESIZE);
+    pa = oper_regs->crcr & ZERO_MASK_64(0b111111);
+    res = sys_map_physical_region(pa, CURENVID, (void*)command_ring_deque, PAGESIZE, PROT_RW | PROT_CD);
+    if (res)
+        return;
     
-    // device_context[1] = (void *)(((uint64_t *)dcbaap)[1] + 0x8040000000);
+    //этому 512 Kib:
+    event_ring_segment_table = (struct EventRingTableEntry*)(command_ring_deque + PAGESIZE);
+    pa = (oper_regs->crcr + PAGESIZE);
+    run_regs->int_reg_set[0].erdp = pa | (run_regs->int_reg_set[0].erdp & 0b111111);
+    res = sys_map_physical_region(pa, CURENVID, (void*)event_ring_segment_table, 512*1024, PROT_RW | PROT_CD);
+    if (res)
+        return;
 
-    // command_ring_deque = (void *)(oper_regs->crcr & (~((uint64_t)0x3f)));
-    // if (command_ring_deque != 0) {
-    //     command_ring_deque = mmio_map_region((uint64_t)command_ring_deque, COMMAND_RING_DEQUE_SIZE);
-    // }
+    event_ring_segment_table[0].ring_segment_size = EVENT_RING_SEGMENT_SIZE;
+//    event_ring_deque = event_ring_segment_base_address;
+// надо?
 
-    // event_ring_deque = (void *)run_regs->int_reg_set[0].erdp + 0x8040000000;
-    // event_ring_segment_table = mmio_map_region((uint64_t)run_regs->int_reg_set[0].erstba, EVENT_RING_TABLE_SIZE);
-    // event_ring_segment_table_size = run_regs->int_reg_set[0].erstsz;
-    // event_ring_segment_base_address = mmio_map_region(event_ring_segment_table[0].ring_segment_base_address, sizeof(struct TRBTemplate) * EVENT_RING_SEGMENT_SIZE);
-    // for (int i = 0; i < sizeof(struct TRBTemplate) * EVENT_RING_SEGMENT_SIZE; i++) {
-    //     event_ring_segment_base_address[i] = 0;
-    // }
-    // event_ring_segment_table[0].ring_segment_size = EVENT_RING_SEGMENT_SIZE;
-    // event_ring_deque = event_ring_segment_base_address;
-    // run_regs->int_reg_set[0].erstba = (uint64_t)event_ring_segment_table;
+    cprintf("^%p\n",ctl->mmio_base_addr);
+    cprintf("^%p\n",oper_regs);
+    cprintf("^%p\n",run_regs);
+    cprintf("^%p\n",doorbells);
+    cprintf("^%p\n",dcbaap);
+    cprintf("^%p\n",command_ring_deque);
+    cprintf("^%p\n",event_ring_segment_table);
 }
 
 static int
