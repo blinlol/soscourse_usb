@@ -287,10 +287,11 @@ void xhci_settings_init() {
     volatile uint32_t xecp = xecp_pointer[0];
     xecp = xecp | (1 << 24);
     cprintf("xecp - %x\n",xecp);
-    cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x400));
-    cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x410));
-    cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x420));
-    cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x430));
+    for (int i = 0; i < 8; i++) {
+        cprintf("PORTSC[%d] = %x   ",i,*(uint32_t*)(((uint8_t*)(oper_regs))+0x400 + i*16));
+        if (i%8 == 7)
+            cprintf("\n");
+    }
     //*(uint32_t*)(((uint8_t*)(oper_regs))+400) |= 1 << 4;
     //cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x400));
 }
@@ -310,13 +311,78 @@ void wait_for_command_ring_running() {
     while (oper_regs->crcr & (1 << 3)) { cprintf("-\n"); }
 }
 
-void xhci_slots_init() {
-    //uint8_t max_slots = cap_regs->hcsparams[0] & 0xFF;
-    for (int i = 0; i < 1000000000; i++) {}
+volatile struct InputContext *input_context;
+volatile struct TransferTRB *transfer_ring;
+
+int xhci_slots_init() {
+    uintptr_t pa_inp_cntx_ptr = XHCI_DATA_STRUCT_PADDR + 1024*1024;
+    uint8_t *va_inp_cntx_ptr = (uint8_t*)(XHCI_DATA_STRUCT_VADDR + 1024*1024);
+    size_t size = sizeof(struct InputContext);
+    if (size % 4096 != 0) {
+        size += 4096;
+        size -= size % 4096;
+    }
+    int res = sys_map_physical_region(pa_inp_cntx_ptr, CURENVID, (void*)va_inp_cntx_ptr, size, PROT_RW | PROT_CD);
+    if (res)
+        return 1;
+    input_context = (void*)va_inp_cntx_ptr;
+
+    volatile uint8_t * input_context_ptr = (void *)input_context;
+    for (int i = 0; i < sizeof(struct InputContext); i++) {
+        input_context_ptr[i] = 0;
+    }
+
+    input_context->input_control_context.add_context = 0x3;
+    input_context->slot_context.root_hub_port_number = 0x5;
+    input_context->slot_context.slot_state = 0x1 << 4;
+    input_context->slot_context.usb_device_address = 0;
+    volatile uint32_t first_row = (1 << 27) + (1 << 20);
+    input_context->slot_context.first_row = first_row;
+
+    //struct DeviceContext * dev_cont_ptr = (void *)device_context[1];
+
+    // здесь и ниже по функции числа взяты наобум
+    uintptr_t pa = XHCI_DATA_STRUCT_PADDR + 1024*1024*2;
+    uint8_t *va = (uint8_t*)(XHCI_DATA_STRUCT_VADDR + 1024*1024*2);
+    res = sys_map_physical_region(pa, CURENVID, (void*)va, (0x4000)*32, PROT_RW | PROT_CD);
+    if (res)
+        return 1;
     
-    cprintf("xhci_slots_init() started\n");
+    for (int i = 1; i < 31; i++) {
+        input_context->endpoint_context[i].transfer_ring_deque_ptr = (uint64_t)(va) + ((uint64_t)i)*0x4000;
+        //dev_cont_ptr->endpoint_context[i].transfer_ring_deque_ptr = (uint64_t)((void *)&(transfer_ring[i][0]) - 0x8040000000);
+    }
+
+    pa = XHCI_DATA_STRUCT_PADDR + 1024*1024*3;
+    va = (uint8_t*)(XHCI_DATA_STRUCT_VADDR + 1024*1024*3);
+    size = sizeof(struct TransferTRB) * 16 * 128;
+    if (size % 4096 != 0) {
+	    size += 4096;
+	    size -= size % 4096;
+    }
+    res = sys_map_physical_region(pa, CURENVID, (void*)va, size, PROT_RW | PROT_CD);
+    if (res)
+        return 1;
+    transfer_ring = (struct TransferTRB*)va;
+
+    input_context->endpoint_context[0].transfer_ring_deque_ptr = (uint64_t)transfer_ring;
+    //dev_cont_ptr->endpoint_context[0].transfer_ring_deque_ptr = (uint64_t)((void *)&(transfer_ring[0][0]) - 0x8040000000 + 1);
+    volatile uint8_t flags = 0x26;
+    input_context->endpoint_context[0].flags_off_08 = flags;
+    input_context->endpoint_context[0].max_burst_size = 0;
+    input_context->endpoint_context[0].interval = 0;
+    input_context->endpoint_context[0].mult_and_max_p_streams = 0;
+    input_context->endpoint_context[0].max_packet_size = 0x8;
+
+    struct AddressDeviceCommandTRB * adr_command_ring_adr = (struct AddressDeviceCommandTRB *)command_ring_deque;
+    adr_command_ring_adr[0] = address_device_command(pa_inp_cntx_ptr, 1, 1);
+    doorbells[0]->target = 0;
+    doorbells[0]->stream_id = 0;
+
+    cprintf("****************xhci_slots_init() started\n");
     wait_for_command_ring_not_running();
-    cprintf("xhci_slots_init() exited\n");
+    cprintf("****************xhci_slots_init() exited\n");
+    return 0;
 }
 
 void xhci_init() {
@@ -333,7 +399,8 @@ void xhci_init() {
         panic("Unable to allocate XHCI structures\n");
     // ПРОДОЛЖИТЬ см nvme_init А ЛУЧШЕ дедовский usb
     xhci_settings_init();
-    xhci_slots_init();
+    if (xhci_slots_init())
+        panic("Unable to allocate XHCI structures\n");
 }
 
 extern volatile int pci_initial;
