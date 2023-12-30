@@ -89,7 +89,7 @@ struct InterrupterRegisterSet {
 #define IMAN_IP 0
 #define IMAN_IE 1
 
-struct DoorbellRegistter {
+struct DoorbellRegister {
     uint8_t target;
     uint8_t rsvd;
     uint16_t stream_id;

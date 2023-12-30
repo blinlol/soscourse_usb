@@ -35,9 +35,12 @@ struct EventRingTableEntry {
     volatile uint8_t ring_segment_size;
     volatile uint8_t rsvdz[3];
 };
-struct Doorbell {
-    volatile uint32_t dbreg[256];
-} * doorbells;
+// struct Doorbell {
+//     volatile uint32_t dbreg[256];
+// } * doorbells;
+struct DoorbellRegister (*doorbells)[256];
+// TODO: db_array[0] is allocated to host controller for command ring managment
+
 // not used yet
 int controller_not_ready() {
     return (oper_regs->usbsts & (1 << 11)) >> 11;
@@ -45,7 +48,6 @@ int controller_not_ready() {
 volatile uint8_t * memory_space_ptr;
 volatile uint8_t * dcbaap;
 volatile uint8_t * device_context[32];
-volatile uint8_t * dcbaap;
 volatile uint8_t * command_ring_deque;
 volatile struct EventRingTableEntry * event_ring_segment_table;
 volatile uint32_t event_ring_segment_table_size;
@@ -231,11 +233,13 @@ int xhci_register_init(struct XhciController *ctl) {
 //    cprintf("!! %d\n",oper_regs->pagesize);
 //    oper_regs->pagesize = 0xFFFFFFFF;
 //    cprintf("!! %d\n",oper_regs->pagesize);
-    
+
+    oper_regs->config = oper_regs->config | 8;
+
     //! Физический адрес взят рандомно
 
     //этому 2048 с выравниванием по 6
-    oper_regs->dcbaap = XHCI_DATA_STRUCT_PADDR & (oper_regs->dcbaap & ZERO_MASK_64(0b111111));
+    oper_regs->dcbaap = XHCI_DATA_STRUCT_PADDR | (oper_regs->dcbaap & 0b111111);
     dcbaap = (uint8_t*)XHCI_DATA_STRUCT_VADDR;
     uintptr_t pa = oper_regs->dcbaap & ZERO_MASK_64(0b111111);
     int res = sys_map_physical_region(pa, CURENVID, (void*)dcbaap, PAGESIZE, PROT_RW | PROT_CD);
