@@ -63,6 +63,9 @@ QEMUOPTS = -hda fat:rw:$(JOS_ESP) -serial mon:stdio -gdb tcp::$(GDBPORT)
 +QEMUOPTS += -device usb-host,vendorid=0x046d,productid=0xc077
 '''
 
+ispras-qemu hasn't "-device usb-host" option, so you should build qemu from source code or download file "qemu-system-x86_64"
+and replace ispras qemu file in its directory. This file build with ubuntu 23.10
+
 then use
 
 #sudo
