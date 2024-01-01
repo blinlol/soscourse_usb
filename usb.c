@@ -9,8 +9,8 @@
 
 // ПОТОМ ПЕРЕНЕСТИ в pci.h строка 53
 #define XHCI_BASE_ADDR         0x7010000000
-#define XHCI_DATA_STRUCT_VADDR 0x7011000000
-#define XHCI_DATA_STRUCT_PADDR 0x810000000
+uint8_t *__xhci_current_Va = (void*)XHCI_BASE_ADDR;
+uintptr_t __xhci_current_Pa;
 #define PAGESIZE 4096
 
 //used already
@@ -204,17 +204,28 @@ void print_usb_memory_region() {
 //     }
 }
 
+// "va" and "pa" returns values
+int memory_map( void **va, uintptr_t *pa, size_t size) {
+    // всегда мапим по границе страницы, иначе ERROR
+    if (size % PAGESIZE != 0)
+        size = size - (size % PAGESIZE) + PAGESIZE;
+    if (va != NULL)
+        *va = (void*)__xhci_current_Va;
+    if (pa != NULL)
+        *pa = __xhci_current_Pa;
+    int res = sys_map_physical_region(__xhci_current_Pa, CURENVID, (void*)__xhci_current_Va, size, PROT_RW | PROT_CD);
+    __xhci_current_Va += size;
+    __xhci_current_Pa += size;
+    return res;
+}
+
 int xhci_map(struct XhciController *ctl) {
-    //ПЕРЕДЕЛАН МАП ПАМЯТИ
-    ctl->mmio_base_addr = (uint8_t*)XHCI_BASE_ADDR;
     size_t size = get_bar_size(ctl->pcidev, 0);
-    //cprintf("SIZE AND ADDR: %p %ld %lx\n",ctl->mmio_base_addr,size,get_bar_address(ctl->pcidev, 0));
     size = size > XHCI_MAX_MAP_MEM ? XHCI_MAX_MAP_MEM : size;
-    int res = sys_map_physical_region(get_bar_address(ctl->pcidev, 0), CURENVID, (void *)ctl->mmio_base_addr, size, PROT_RW | PROT_CD);
-    // добавить коды ошибок
-    if (res)
-        return 1;
-    return 0;
+    // first time initialization of pa pointer
+    __xhci_current_Pa = get_bar_address(ctl->pcidev, 0);
+    return memory_map((void**)(&(ctl->mmio_base_addr)),NULL,size);
+    //now, ctl->mmio_base_addris initialized
 }
 
 int xhci_register_init(struct XhciController *ctl) {
@@ -234,40 +245,43 @@ int xhci_register_init(struct XhciController *ctl) {
 //    oper_regs->pagesize = 0xFFFFFFFF;
 //    cprintf("!! %d\n",oper_regs->pagesize);
 
-    oper_regs->config = oper_regs->config | 8;
-
-    //! Физический адрес взят рандомно
+//    oper_regs->config = oper_regs->config | 8;
 
     //этому 2048 с выравниванием по 6
-    oper_regs->dcbaap = XHCI_DATA_STRUCT_PADDR | (oper_regs->dcbaap & 0b111111);
-    dcbaap = (uint8_t*)XHCI_DATA_STRUCT_VADDR;
-    uintptr_t pa = oper_regs->dcbaap & ZERO_MASK_64(0b111111);
-    int res = sys_map_physical_region(pa, CURENVID, (void*)dcbaap, PAGESIZE, PROT_RW | PROT_CD);
-    if (res)
-        return 1;
-    cprintf("^%p\n",dcbaap);
+    uintptr_t pa;
+    int res;
+    size_t size = PAGESIZE;
+    if ((res = memory_map((void**)(&dcbaap),&pa,size)))
+        return res;
+    oper_regs->dcbaap = pa | (oper_regs->dcbaap & 0b111111);
+    cprintf("^%p %lx\n",dcbaap,oper_regs->dcbaap & ZERO_MASK_64(0b111111));
 
     //этому 4 Kib
-    oper_regs->crcr = ((oper_regs->dcbaap & ZERO_MASK_64(0b111111)) | (oper_regs->crcr & 0b111111)) + PAGESIZE;
-    command_ring_deque = (uint8_t*)(XHCI_DATA_STRUCT_VADDR + PAGESIZE);
-    pa = oper_regs->crcr & ZERO_MASK_64(0b111111);
-    res = sys_map_physical_region(pa, CURENVID, (void*)command_ring_deque, PAGESIZE, PROT_RW | PROT_CD);
-    if (res)
-        return 1;
-    cprintf("^%p\n",command_ring_deque);
-    
-    //этому 512 Kib:
-    event_ring_segment_table = (struct EventRingTableEntry*)(command_ring_deque + PAGESIZE);
-    pa = pa + PAGESIZE;
-    run_regs->int_reg_set[0].erdp = pa | (run_regs->int_reg_set[0].erdp & 0b111111);
-    res = sys_map_physical_region(pa, CURENVID, (void*)event_ring_segment_table, 512*1024, PROT_RW | PROT_CD);
-    if (res)
-        return 1;
-    cprintf("^%p\n",event_ring_segment_table);
+    size = PAGESIZE;
+    if ((res = memory_map((void**)(&command_ring_deque),&pa,size)))
+        return res;
+    oper_regs->crcr = pa | (oper_regs->crcr & 0b111111);
+    cprintf("^%p %lx\n",command_ring_deque,oper_regs->crcr & ZERO_MASK_64(0b111111));
 
-    event_ring_segment_table[0].ring_segment_size = EVENT_RING_SEGMENT_SIZE;
-//    event_ring_deque = event_ring_segment_base_address;
-// надо?
+    //этому 512 Kib:
+    size = 512*1024;
+    if ((res = memory_map((void**)(&event_ring_segment_table),&pa,size)))
+        return res;
+    cprintf("^%p %lx\n",event_ring_segment_table,pa);
+    
+    // THIS DONt WORKS
+    run_regs->int_reg_set[0].erdp = pa | (run_regs->int_reg_set[0].erdp & 0b111111);
+
+    for (int i = 0; i < EVENT_RING_TABLE_SIZE; i++)
+        event_ring_segment_table[i].ring_segment_size = EVENT_RING_SEGMENT_SIZE;
+
+    size = sizeof(struct TRBTemplate) * EVENT_RING_SEGMENT_SIZE;
+    if ((res = memory_map((void**)(&event_ring_segment_base_address),&pa,size)))
+        return res;
+
+    for (int i = 0; i < sizeof(struct TRBTemplate) * EVENT_RING_SEGMENT_SIZE; i++) {
+        event_ring_segment_base_address[i] = 0;
+    }
 
     return 0;
 }
@@ -281,27 +295,22 @@ void xhci_settings_init() {
     usbcmd = usbcmd | 0x1;
     oper_regs->usbcmd = usbcmd;         // setting Run/Stop register to Run state 
 
-    volatile uint16_t xecp_offset = (cap_regs->hccparams1 >> 16);
-    cprintf("hccparams1 - %x\n", cap_regs->hccparams1);
-    volatile uint32_t * xecp_pointer = (uint32_t *)((uint8_t *)cap_regs + (xecp_offset << 2)); 
-    volatile uint32_t xecp = xecp_pointer[0];
-    xecp = xecp | (1 << 24);
-    cprintf("xecp - %x\n",xecp);
+    //volatile uint16_t xecp_offset = (cap_regs->hccparams1 >> 16);
+    //cprintf("hccparams1 - %x\n", cap_regs->hccparams1);
+    //volatile uint32_t * xecp_pointer = (uint32_t *)((uint8_t *)cap_regs + (xecp_offset << 2)); 
+    //volatile uint32_t xecp = xecp_pointer[0];
+    //xecp = xecp | (1 << 24);
+    //cprintf("xecp - %x\n",xecp);
+
+    // здесь печать обнаруженных устройств. Если не видите здесь своего устройства - это проблема
     for (int i = 0; i < 8; i++) {
-        cprintf("PORTSC[%d] = %x   ",i,*(uint32_t*)(((uint8_t*)(oper_regs))+0x400 + i*16));
-        if (i%8 == 7)
-            cprintf("\n");
+        uint32_t val = *(uint32_t*)(((uint8_t*)(oper_regs))+0x400 + i*16);
+        if ( val != 0x2a0 )
+            cprintf("FIND: ");
+        cprintf("PORTSC[%d] = %x\n",i,val);
     }
-    //*(uint32_t*)(((uint8_t*)(oper_regs))+400) |= 1 << 4;
-    //cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x400));
+    cprintf("\n");
 }
-
-
-
-
-
-
-
 
 void wait_for_command_ring_not_running() {
     while ((oper_regs->crcr & (1 << 3)) == 0) {}
@@ -314,23 +323,30 @@ void wait_for_command_ring_running() {
 volatile struct InputContext *input_context;
 volatile struct TransferTRB *transfer_ring;
 
-int xhci_slots_init() {
-    uintptr_t pa_inp_cntx_ptr = XHCI_DATA_STRUCT_PADDR + 1024*1024;
-    uint8_t *va_inp_cntx_ptr = (uint8_t*)(XHCI_DATA_STRUCT_VADDR + 1024*1024);
-    size_t size = sizeof(struct InputContext);
-    if (size % 4096 != 0) {
-        size += 4096;
-        size -= size % 4096;
+struct AddressDeviceCommandTRB address_device_command(uint64_t input_context_ptr, uint8_t slot_id, bool cycle_bit) {
+    struct AddressDeviceCommandTRB adr_trb;
+    adr_trb.slot_id = slot_id;
+    adr_trb.input_context_ptr = input_context_ptr;
+    adr_trb.reserved0 = 0;
+    adr_trb.flags = 11 << 10;
+    adr_trb.reserved1 = 0;
+    if (cycle_bit) {
+        adr_trb.flags += 1;
     }
-    int res = sys_map_physical_region(pa_inp_cntx_ptr, CURENVID, (void*)va_inp_cntx_ptr, size, PROT_RW | PROT_CD);
-    if (res)
-        return 1;
-    input_context = (void*)va_inp_cntx_ptr;
+    return adr_trb;
+}
 
-    volatile uint8_t * input_context_ptr = (void *)input_context;
-    for (int i = 0; i < sizeof(struct InputContext); i++) {
-        input_context_ptr[i] = 0;
-    }
+int xhci_slots_init() {
+    size_t size = sizeof(struct InputContext);
+    uintptr_t pa_inp_cntx_ptr;
+    int res;
+    if ((res = memory_map((void**)(&input_context),&pa_inp_cntx_ptr,size)))
+        return res;
+
+//    volatile uint8_t * input_context_ptr = (void *)input_context;
+//    for (int i = 0; i < sizeof(struct InputContext); i++) {
+//        input_context_ptr[i] = 0;
+//    }
 
     input_context->input_control_context.add_context = 0x3;
     input_context->slot_context.root_hub_port_number = 0x5;
@@ -341,29 +357,20 @@ int xhci_slots_init() {
 
     //struct DeviceContext * dev_cont_ptr = (void *)device_context[1];
 
-    // здесь и ниже по функции числа взяты наобум
-    uintptr_t pa = XHCI_DATA_STRUCT_PADDR + 1024*1024*2;
-    uint8_t *va = (uint8_t*)(XHCI_DATA_STRUCT_VADDR + 1024*1024*2);
-    res = sys_map_physical_region(pa, CURENVID, (void*)va, (0x4000)*32, PROT_RW | PROT_CD);
-    if (res)
-        return 1;
-    
+    size = (PAGESIZE)*32;
+    uintptr_t pa;
+    uint8_t va;
+    if ((res = memory_map((void**)(&va),&pa,size)))
+        return res;
+
     for (int i = 1; i < 31; i++) {
-        input_context->endpoint_context[i].transfer_ring_deque_ptr = (uint64_t)(va) + ((uint64_t)i)*0x4000;
+        input_context->endpoint_context[i].transfer_ring_deque_ptr = (uint64_t)(va) + ((uint64_t)i)*PAGESIZE;
         //dev_cont_ptr->endpoint_context[i].transfer_ring_deque_ptr = (uint64_t)((void *)&(transfer_ring[i][0]) - 0x8040000000);
     }
 
-    pa = XHCI_DATA_STRUCT_PADDR + 1024*1024*3;
-    va = (uint8_t*)(XHCI_DATA_STRUCT_VADDR + 1024*1024*3);
     size = sizeof(struct TransferTRB) * 16 * 128;
-    if (size % 4096 != 0) {
-	    size += 4096;
-	    size -= size % 4096;
-    }
-    res = sys_map_physical_region(pa, CURENVID, (void*)va, size, PROT_RW | PROT_CD);
-    if (res)
-        return 1;
-    transfer_ring = (struct TransferTRB*)va;
+    if ((res = memory_map((void**)(&transfer_ring),&pa,size)))
+        return res;
 
     input_context->endpoint_context[0].transfer_ring_deque_ptr = (uint64_t)transfer_ring;
     //dev_cont_ptr->endpoint_context[0].transfer_ring_deque_ptr = (uint64_t)((void *)&(transfer_ring[0][0]) - 0x8040000000 + 1);
@@ -379,9 +386,7 @@ int xhci_slots_init() {
     doorbells[0]->target = 0;
     doorbells[0]->stream_id = 0;
 
-    cprintf("****************xhci_slots_init() started\n");
-    wait_for_command_ring_not_running();
-    cprintf("****************xhci_slots_init() exited\n");
+    //wait_for_command_ring_not_running();
     return 0;
 }
 

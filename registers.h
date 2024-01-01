@@ -103,3 +103,9 @@ struct RuntimeRegisters {
     volatile uint32_t rsvdz[7];
     volatile struct InterrupterRegisterSet int_reg_set[INTERRUPTER_REGISTER_SET_MAXCOUNT];
 } * run_regs;
+
+struct TRBTemplate {
+    volatile uint64_t parameter;
+    volatile uint32_t status;
+    volatile uint32_t control;
+};
