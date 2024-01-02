@@ -19,10 +19,6 @@ uintptr_t __xhci_current_Pa;
 #define XHCI_MAX_MAP_MEM 0x4000
 #define XHCI_RING_DEQUE_MEM 4096 //why 4096?
 #define DEVICE_NUMBRER 8 // вот я хочу 8 устройств, этого в целом достаточно
-//not used yet
-#define INTERRUPTER_REGISTER_SET_COUNT 256
-#define EVENT_RING_TABLE_SIZE 256
-#define EVENT_RING_SEGMENT_SIZE 128
 #define COMMAND_RING_DEQUE_SIZE 4096
 
 //аналогично nvme
@@ -271,61 +267,53 @@ int xhci_register_init(struct XhciController *ctl) {
     // TODO: zero fields of new pages, но не все, см 4.5.2
 
     // этому 4 Kib
-    size = PAGESIZE;
+    // COMMAND RING allocate
+    size = COMMAND_RING_DEQUE_SIZE;
     if ((res = memory_map((void**)(&command_ring_deque),&pa,size)))
         return res;
     oper_regs->crcr = pa | (oper_regs->crcr & 0b111111);
-    cprintf("^%p %lx\n",command_ring_deque,oper_regs->crcr & ZERO_MASK_64(0b111111));    
-
-    //этому 512 Kib:
-    size = 512*1024;
-    if ((res = memory_map((void**)(&event_ring_segment_table),&pa,size)))
-        return res;
-    cprintf("^%p %lx\n",event_ring_segment_table,pa);
-    
-    // THIS DONt WORKS
-    // run_regs->int_reg_set[0].erdp = pa | (run_regs->int_reg_set[0].erdp & 0b111111);
-
-    // struct Device Context needs: devicee context mapping
-
-    for (int i = 0; i < EVENT_RING_TABLE_SIZE; i++)
-        event_ring_segment_table[i].ring_segment_size = EVENT_RING_SEGMENT_SIZE;
-
-    size = sizeof(struct TRBTemplate) * EVENT_RING_SEGMENT_SIZE;
-    if ((res = memory_map((void**)(&event_ring_segment_base_address),&pa,size)))
-        return res;
-
-    for (int i = 0; i < sizeof(struct TRBTemplate) * EVENT_RING_SEGMENT_SIZE; i++) {
-        event_ring_segment_base_address[i] = 0;
-    }
+    cprintf("^%p %lx\n\n",command_ring_deque,oper_regs->crcr & ZERO_MASK_64(0b111111));
 
     return 0;
 }
 
-void xhci_event_ring_init(){
-    for (int i=0; i < INTERRUPTER_REGISTER_SET_MAXCOUNT; i++){        
-        struct EventRingSegment *erst;
-        int res = sys_alloc_region(CURENVID, erst, ERST_SIZE * sizeof(struct EventRingSegment));
 
-        for (int j=0; j < ERST_SIZE; j++){
-            void *ers;
-            int res = sys_alloc_region(CURENVID, ers, TRB_SIZE * ERS_SIZE, PROT_RW);
-            if (res){
-                cprintf("xhci_event_ring_init: sys_alloc_region failed: %i\n", res);
-                return;
-            }
+struct EventRingSegment *event_ring_segment_table;
+struct EventRing {
+    struct TRBTemplate trb[ERS_SIZE];
+} *event_ring;
 
-            erst[j].ring_segment_base_address = ers;
-            erst[j].ring_segment_size = ERS_SIZE;
-        }
+int xhci_event_ring_init(){
+    // выделим 16 Kib для таблицы, потом переприсвоим erstba
+    // НО sizeof(struct EventRingSegment) = 16, а выравнивание erstba - 64
+    // надо выделить 64 кб, тк 1024 с шагом 64
+    size_t size = 64*1024; //INTERRUPTER_REGISTER_SET_MAXCOUNT * ERST_SIZE * sizeof(struct EventRingSegment);
+    uintptr_t pa_event_ring_segment_table;
+    int res;
+    if ((res = memory_map((void**)(&event_ring_segment_table),&pa_event_ring_segment_table,size)))
+        return res;
+    cprintf("^%p %lx\n",event_ring_segment_table,pa_event_ring_segment_table);
+    
+    // выделим 512kib для самих Event Ring
+    size = INTERRUPTER_REGISTER_SET_MAXCOUNT * ERST_SIZE * ERS_SIZE * sizeof(struct EventRingSegment);
+    uintptr_t pa_event_ring;
+    if ((res = memory_map((void**)(&event_ring),&pa_event_ring,size)))
+        return res;
+    cprintf("^%p %lx\n",event_ring,pa_event_ring);
+    memset(event_ring,0,size);
 
-        struct InterrupterRegisterSet irs = run_regs->int_reg_set[i];
-        irs.erstsz = ERST_SIZE;
-        irs.erdp = erst[0].ring_segment_base_address;
-        irs.erstba = erst;
+    for (int i=0; i < INTERRUPTER_REGISTER_SET_MAXCOUNT; i++){
+        event_ring_segment_table[i].ring_segment_size = ERS_SIZE;
+        event_ring_segment_table[i].ring_segment_base_address = pa_event_ring_segment_table + 64*i;
+        //cprintf("    %lx",event_ring_segment_table[i].ring_segment_base_address);
 
-        run_regs->int_reg_set[i] = irs;
+        run_regs->int_reg_set[i].erstsz.erstsz = 1;
+        run_regs->int_reg_set[i].erdp = pa_event_ring + sizeof(struct TRBTemplate) * ERS_SIZE * i;
+        run_regs->int_reg_set[i].erstba = event_ring_segment_table[i].ring_segment_base_address;
+        
+        //cprintf("    %lx %lx\n",run_regs->int_reg_set[i].erdp,run_regs->int_reg_set[i].erstba);
     }
+    return 0;
 }
 
 void xhci_settings_init() {

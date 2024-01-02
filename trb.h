@@ -4,7 +4,7 @@
 #define TRB_SIZE 16 // bytes
 
 // Transfer TRBs (6.4.1)
-struct NormalTRB{
+/*struct NormalTRB{
     uint64_t data_buffer_ptr;
     uint32_t transfer_length: 17;
     uint8_t td_size: 5;
@@ -468,7 +468,7 @@ struct EventDataTRB {
     bool bei: 1;
     uint8_t type: 6;
     uint16_t rsvdz3;
-} PACKED;
+} PACKED;*/
 
 
 
