@@ -255,6 +255,7 @@ int xhci_register_init(struct XhciController *ctl) {
         if ((res = memory_map((void**)(dcbaa_table_clone+i),&pa,PAGESIZE) ))
             return res;
         dcbaap[i] = pa;
+        memset(&dcbaa_table_clone[i], 0, PAGESIZE);
         cprintf("  ^%p %lx %lx\n",dcbaa_table_clone[i],pa,dcbaap[i]);
     }
     uint32_t scratchpad = (cap_regs->hcsparams2 >> 21) & 0b11111;
