@@ -5,6 +5,7 @@
 
 #include "usb/context.h"
 #include "usb/registers.h"
+#include "usb/event_ring.h"
 
 
 // ПОТОМ ПЕРЕНЕСТИ в pci.h строка 53
@@ -30,11 +31,11 @@ struct XhciController {
     volatile uint8_t *buffer;
 };
 static struct XhciController xhci;
-struct EventRingTableEntry {
-    volatile uint64_t ring_segment_base_address;
-    volatile uint8_t ring_segment_size;
-    volatile uint8_t rsvdz[3];
-};
+// struct EventRingSegment {
+//     volatile uint64_t ring_segment_base_address;
+//     volatile uint8_t ring_segment_size;
+//     volatile uint8_t rsvdz[3];
+// };
 
 struct DoorbellRegister (*doorbells)[256];
 // TODO: db_array[0] is allocated to host controller for command ring managment
@@ -46,10 +47,9 @@ volatile uint8_t * memory_space_ptr;
 volatile uint64_t * dcbaap;
 volatile uint8_t * device_context[32];
 volatile uint8_t * command_ring_deque;
-volatile struct EventRingTableEntry * event_ring_segment_table;
-volatile uint32_t event_ring_segment_table_size;
-volatile uint8_t * event_ring_segment_base_address;
-volatile uint8_t * event_ring_deque;
+
+uint32_t event_ring_segment_table_size = 1;
+uint32_t event_ring_segment_size = 32;
 struct DeviceContext *dcbaa_table_clone[DEVICE_NUMBRER];
 
 
@@ -201,14 +201,6 @@ void print_usb_memory_region() {
 //         }
 //     }
 }
-
-void print_ports(){
-    uint8_t num_ports = cap_regs->hcsparams1 >> 24;
-    for (uint8_t i=1; i <= num_ports; i++){
-        cprintf("PORTSC[%u] = %x\n", i, *((uint32_t*)((uint8_t*)oper_regs + (0x400 + (0x10 * (i - 1))))));
-    }
-}
-
 // "va" and "pa" returns values
 int memory_map( void **va, uintptr_t *pa, size_t size) {
     // всегда мапим по границе страницы, иначе ERROR
@@ -309,6 +301,35 @@ int xhci_register_init(struct XhciController *ctl) {
     }
 
     return 0;
+}
+
+void xhci_event_ring_init(){
+    uint32_t erst_size = event_ring_segment_table_size;
+    uint32_t ers_size = event_ring_segment_size;
+
+    for (int i=0; i < INTERRUPTER_REGISTER_SET_MAXCOUNT; i++){        
+        struct EventRingSegment *erst;
+        int res = sys_alloc_region(CURENVID, erst, erst_size * sizeof(struct EventRingSegment));
+
+        for (int j=0; j < erst_size; j++){
+            void *ers;
+            int res = sys_alloc_region(CURENVID, ers, TRB_SIZE * ers_size, PROT_RW);
+            if (res){
+                cprintf("xhci_event_ring_init: sys_alloc_region failed: %i\n", res);
+                return;
+            }
+
+            erst[j].ring_segment_base_address = ers;
+            erst[j].ring_segment_size = ers_size;
+        }
+
+        struct InterrupterRegisterSet irs = run_regs->int_reg_set[i];
+        irs.erstsz = erst_size;
+        irs.erdp = erst[0].ring_segment_base_address;
+        irs.erstba = erst[0].ring_segment_base_address;
+
+        run_regs->int_reg_set[i] = irs;
+    }
 }
 
 void xhci_settings_init() {
@@ -434,6 +455,8 @@ void xhci_init() {
     print_usb_memory_region();
     if (xhci_register_init(ctl))
         panic("Unable to allocate XHCI structures\n");
+
+    xhci_event_ring_init();
     // ПРОДОЛЖИТЬ см nvme_init А ЛУЧШЕ дедовский usb
     xhci_settings_init();
 
