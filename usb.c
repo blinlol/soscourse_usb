@@ -9,19 +9,19 @@
 
 // ПОТОМ ПЕРЕНЕСТИ в pci.h строка 53
 #define XHCI_BASE_ADDR         0x7010000000
-#define XHCI_DATA_STRUCT_VADDR 0x7011000000
-#define XHCI_DATA_STRUCT_PADDR 0x810000000
+uint8_t *__xhci_current_Va = (void*)XHCI_BASE_ADDR;
+uintptr_t __xhci_current_Pa;
 #define PAGESIZE 4096
 
 //used already
 #define XHCI_MAX_MAP_MEM 0x4000
 #define XHCI_RING_DEQUE_MEM 4096 //why 4096?
+#define DEVICE_NUMBRER 8 // вот я хочу 8 устройств, этого в целом достаточно
 //not used yet
 #define INTERRUPTER_REGISTER_SET_COUNT 256
 #define EVENT_RING_TABLE_SIZE 256
 #define EVENT_RING_SEGMENT_SIZE 128
 #define COMMAND_RING_DEQUE_SIZE 4096
-#define DCBAAP_SIZE 128
 
 //аналогично nvme
 struct XhciController {
@@ -35,24 +35,22 @@ struct EventRingTableEntry {
     volatile uint8_t ring_segment_size;
     volatile uint8_t rsvdz[3];
 };
-// struct Doorbell {
-//     volatile uint32_t dbreg[256];
-// } * doorbells;
+
 struct DoorbellRegister (*doorbells)[256];
 // TODO: db_array[0] is allocated to host controller for command ring managment
 
-// not used yet
 int controller_not_ready() {
     return (oper_regs->usbsts & (1 << 11)) >> 11;
 }
 volatile uint8_t * memory_space_ptr;
-volatile uint8_t * dcbaap;
+volatile uint64_t * dcbaap;
 volatile uint8_t * device_context[32];
 volatile uint8_t * command_ring_deque;
 volatile struct EventRingTableEntry * event_ring_segment_table;
 volatile uint32_t event_ring_segment_table_size;
 volatile uint8_t * event_ring_segment_base_address;
 volatile uint8_t * event_ring_deque;
+struct DeviceContext *dcbaa_table_clone[DEVICE_NUMBRER];
 
 
 
@@ -211,20 +209,32 @@ void print_ports(){
     }
 }
 
+// "va" and "pa" returns values
+int memory_map( void **va, uintptr_t *pa, size_t size) {
+    // всегда мапим по границе страницы, иначе ERROR
+    if (size % PAGESIZE != 0)
+        size = size - (size % PAGESIZE) + PAGESIZE;
+    if (va != NULL)
+        *va = (void*)__xhci_current_Va;
+    if (pa != NULL)
+        *pa = __xhci_current_Pa;
+    int res = sys_map_physical_region(__xhci_current_Pa, CURENVID, (void*)__xhci_current_Va, size, PROT_RW | PROT_CD);
+    __xhci_current_Va += size;
+    __xhci_current_Pa += size;
+    return res;
+}
+
 int xhci_map(struct XhciController *ctl) {
-    //ПЕРЕДЕЛАН МАП ПАМЯТИ
-    ctl->mmio_base_addr = (uint8_t*)XHCI_BASE_ADDR;
     size_t size = get_bar_size(ctl->pcidev, 0);
-    //cprintf("SIZE AND ADDR: %p %ld %lx\n",ctl->mmio_base_addr,size,get_bar_address(ctl->pcidev, 0));
     size = size > XHCI_MAX_MAP_MEM ? XHCI_MAX_MAP_MEM : size;
-    int res = sys_map_physical_region(get_bar_address(ctl->pcidev, 0), CURENVID, (void *)ctl->mmio_base_addr, size, PROT_RW | PROT_CD);
-    // добавить коды ошибок
-    if (res)
-        return 1;
-    return 0;
+    // first time initialization of pa pointer
+    __xhci_current_Pa = get_bar_address(ctl->pcidev, 0);
+    return memory_map((void**)(&(ctl->mmio_base_addr)),NULL,size);
+    //now, ctl->mmio_base_address is initialized
 }
 
 int xhci_register_init(struct XhciController *ctl) {
+    __xhci_current_Pa = 0x1000000;
     uint8_t *memory_space_ptr = (uint8_t*)ctl->mmio_base_addr;
     cap_regs = (struct CapabilityRegisters *)memory_space_ptr;
     cprintf("^%p\n",cap_regs);
@@ -241,74 +251,89 @@ int xhci_register_init(struct XhciController *ctl) {
 //    oper_regs->pagesize = 0xFFFFFFFF;
 //    cprintf("!! %d\n",oper_regs->pagesize);
 
-    //! Физический адрес взят рандомно
 
-    //этому 2048 с выравниванием по 6
-    oper_regs->dcbaap = XHCI_DATA_STRUCT_PADDR | (oper_regs->dcbaap & 0b111111);
-    dcbaap = (uint8_t*)XHCI_DATA_STRUCT_VADDR;
-    uintptr_t pa = oper_regs->dcbaap & ZERO_MASK_64(0b111111);
-    int res = sys_map_physical_region(pa, CURENVID, (void*)dcbaap, PAGESIZE, PROT_RW | PROT_CD);
-    if (res)
-        return 1;
-    cprintf("^%p\n",dcbaap);
+    // этому 2048 с выравниванием по 6
+    // но мапится всё равно целое число страниц, поэтому так
+    uintptr_t pa;
+    int res;
+    size_t size = PAGESIZE;
+    if ((res = memory_map((void**)(&dcbaap),&pa,size)))
+        return res;
+    oper_regs->dcbaap = pa | (oper_regs->dcbaap & 0b111111);
+    cprintf("^%p %lx\n",dcbaap,oper_regs->dcbaap & ZERO_MASK_64(0b111111));
 
-    //этому 4 Kib
-    oper_regs->crcr = ((oper_regs->dcbaap & ZERO_MASK_64(0b111111)) | (oper_regs->crcr & 0b111111)) + PAGESIZE;
-    command_ring_deque = (uint8_t*)(XHCI_DATA_STRUCT_VADDR + PAGESIZE);
-    pa = oper_regs->crcr & ZERO_MASK_64(0b111111);
-    res = sys_map_physical_region(pa, CURENVID, (void*)command_ring_deque, PAGESIZE, PROT_RW | PROT_CD);
-    if (res)
-        return 1;
-    cprintf("^%p\n",command_ring_deque);
-    
+    // !но каждому из DCBAA нужна своя DeviceContext
+    memset((void*)dcbaap,0,PAGESIZE);
+    for (int i = 1; i < DEVICE_NUMBRER; i++) {
+        if ((res = memory_map((void**)(dcbaa_table_clone+i),&pa,PAGESIZE) ))
+            return res;
+        dcbaap[i] = pa;
+        cprintf("  ^%p %lx %lx\n",dcbaa_table_clone[i],pa,dcbaap[i]);
+    }
+    uint32_t scratchpad = (cap_regs->hcsparams2 >> 21) & 0b11111;
+    if ( scratchpad > 0) {
+        // impossible in our case
+        if (( res = memory_map((void**)dcbaa_table_clone, &pa, PAGESIZE*scratchpad) ))
+            return res;
+        dcbaap[0] = pa;
+    }
+    // TODO: zero fields of new pages, но не все, см 4.5.2
+
+    // этому 4 Kib
+    size = PAGESIZE;
+    if ((res = memory_map((void**)(&command_ring_deque),&pa,size)))
+        return res;
+    oper_regs->crcr = pa | (oper_regs->crcr & 0b111111);
+    cprintf("^%p %lx\n",command_ring_deque,oper_regs->crcr & ZERO_MASK_64(0b111111));    
+
     //этому 512 Kib:
-    event_ring_segment_table = (struct EventRingTableEntry*)(command_ring_deque + PAGESIZE);
-    pa = pa + PAGESIZE;
-    run_regs->int_reg_set[0].erdp = pa | (run_regs->int_reg_set[0].erdp & 0b111111);
-    res = sys_map_physical_region(pa, CURENVID, (void*)event_ring_segment_table, 512*1024, PROT_RW | PROT_CD);
-    if (res)
-        return 1;
-    cprintf("^%p\n",event_ring_segment_table);
+    size = 512*1024;
+    if ((res = memory_map((void**)(&event_ring_segment_table),&pa,size)))
+        return res;
+    cprintf("^%p %lx\n",event_ring_segment_table,pa);
+    
+    // THIS DONt WORKS
+    // run_regs->int_reg_set[0].erdp = pa | (run_regs->int_reg_set[0].erdp & 0b111111);
 
-    event_ring_segment_table[0].ring_segment_size = EVENT_RING_SEGMENT_SIZE;
-//    event_ring_deque = event_ring_segment_base_address;
-// надо?
+    // struct Device Context needs: devicee context mapping
+
+    for (int i = 0; i < EVENT_RING_TABLE_SIZE; i++)
+        event_ring_segment_table[i].ring_segment_size = EVENT_RING_SEGMENT_SIZE;
+
+    size = sizeof(struct TRBTemplate) * EVENT_RING_SEGMENT_SIZE;
+    if ((res = memory_map((void**)(&event_ring_segment_base_address),&pa,size)))
+        return res;
+
+    for (int i = 0; i < sizeof(struct TRBTemplate) * EVENT_RING_SEGMENT_SIZE; i++) {
+        event_ring_segment_base_address[i] = 0;
+    }
 
     return 0;
 }
 
 void xhci_settings_init() {
-    volatile uint32_t config = oper_regs->config;
-    config = config | 0x8;               // setting number of device slots equal 8
-    oper_regs->config = config;
+    oper_regs->config |= DEVICE_NUMBRER;
 
     volatile uint32_t usbcmd = oper_regs->usbcmd;
     usbcmd = usbcmd | 0x1;
     oper_regs->usbcmd = usbcmd;         // setting Run/Stop register to Run state 
 
-    volatile uint16_t xecp_offset = (cap_regs->hccparams1 >> 16);
-    cprintf("hccparams1 - %x\n", cap_regs->hccparams1);
-    volatile uint32_t * xecp_pointer = (uint32_t *)((uint8_t *)cap_regs + (xecp_offset << 2)); 
-    volatile uint32_t xecp = xecp_pointer[0];
-    xecp = xecp | (1 << 24);    // what is it?
-    cprintf("xecp - %x\n",xecp);
+    //volatile uint16_t xecp_offset = (cap_regs->hccparams1 >> 16);
+    //cprintf("hccparams1 - %x\n", cap_regs->hccparams1);
+    //volatile uint32_t * xecp_pointer = (uint32_t *)((uint8_t *)cap_regs + (xecp_offset << 2)); 
+    //volatile uint32_t xecp = xecp_pointer[0];
+    //xecp = xecp | (1 << 24);
+    //cprintf("xecp - %x\n",xecp);
 
-    // ???
-    print_ports();
-    // cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x400));
-    // cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x410));
-    // cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x420));
-    // cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x430));
-    //*(uint32_t*)(((uint8_t*)(oper_regs))+400) |= 1 << 4;
-    //cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x400));
+    // здесь печать обнаруженных устройств. Если не видите здесь своего устройства - это проблема
+    for (int i = 0; i < 8; i++) {
+        uint32_t val = *(uint32_t*)(((uint8_t*)(oper_regs))+0x400 + i*16);
+        if ( val != 0x2a0 )
+            cprintf("FIND: ");
+        cprintf("PORTSC[%d] = %x\n",i,val);
+    }
+    cprintf("\n");
 }
-
-
-
-
-
-
-
 
 void wait_for_command_ring_not_running() {
     while ((oper_regs->crcr & (1 << 3)) == 0) {}
@@ -318,13 +343,77 @@ void wait_for_command_ring_running() {
     while (oper_regs->crcr & (1 << 3)) { cprintf("-\n"); }
 }
 
-void xhci_slots_init() {
-    //uint8_t max_slots = cap_regs->hcsparams[0] & 0xFF;
-    for (int i = 0; i < 1000000000; i++) {}
-    
-    cprintf("xhci_slots_init() started\n");
-    wait_for_command_ring_not_running();
-    cprintf("xhci_slots_init() exited\n");
+volatile struct InputContext *input_context;
+volatile struct TransferTRB *transfer_ring;
+
+struct AddressDeviceCommandTRB address_device_command(uint64_t input_context_ptr, uint8_t slot_id, bool cycle_bit) {
+    struct AddressDeviceCommandTRB adr_trb;
+    adr_trb.slot_id = slot_id;
+    adr_trb.input_context_ptr = input_context_ptr;
+    adr_trb.reserved0 = 0;
+    adr_trb.flags = 11 << 10;
+    adr_trb.reserved1 = 0;
+    if (cycle_bit) {
+        adr_trb.flags += 1;
+    }
+    return adr_trb;
+}
+
+int xhci_slots_init() {
+    size_t size = sizeof(struct InputContext);
+    uintptr_t pa_inp_cntx_ptr;
+    int res;
+    if ((res = memory_map((void**)(&input_context),&pa_inp_cntx_ptr,size)))
+        return res;
+
+//    volatile uint8_t * input_context_ptr = (void *)input_context;
+//    for (int i = 0; i < sizeof(struct InputContext); i++) {
+//        input_context_ptr[i] = 0;
+//    }
+
+    input_context->input_control_context.add_context_flags = 0x3;
+    input_context->slot_context.root_hub_port_number = 0x5;
+    input_context->slot_context.slot_state = 0x1 << 4;
+    //input_context->slot_context.usb_device_address = 0;
+    uint32_t buf = input_context->slot_context.slot_state;
+    buf = buf & ZERO_MASK_32(0xFF);
+    input_context->slot_context.slot_state = buf;
+    volatile uint32_t first_row = (1 << 27) + (1 << 20);
+    input_context->slot_context.first_row = first_row;
+
+    //struct DeviceContext * dev_cont_ptr = (void *)device_context[1];
+
+    size = (PAGESIZE)*32;
+    uintptr_t pa;
+    uint8_t va;
+    if ((res = memory_map((void**)(&va),&pa,size)))
+        return res;
+
+    for (int i = 1; i < 31; i++) {
+        input_context->endpoint_context[i].transfer_ring_deque_ptr = (uint64_t)(va) + ((uint64_t)i)*PAGESIZE;
+        //dev_cont_ptr->endpoint_context[i].transfer_ring_deque_ptr = (uint64_t)((void *)&(transfer_ring[i][0]) - 0x8040000000);
+    }
+
+    size = sizeof(struct TransferTRB) * 16 * 128;
+    if ((res = memory_map((void**)(&transfer_ring),&pa,size)))
+        return res;
+
+    input_context->endpoint_context[0].transfer_ring_deque_ptr = (uint64_t)transfer_ring;
+    //dev_cont_ptr->endpoint_context[0].transfer_ring_deque_ptr = (uint64_t)((void *)&(transfer_ring[0][0]) - 0x8040000000 + 1);
+    volatile uint8_t flags = 0x26;
+    input_context->endpoint_context[0].flags_off = flags;
+    input_context->endpoint_context[0].max_burst_size = 0;
+    input_context->endpoint_context[0].interval = 0;
+    input_context->endpoint_context[0].maxPStreams = 0;
+    input_context->endpoint_context[0].max_packet_size = 0x8;
+
+    struct AddressDeviceCommandTRB * adr_command_ring_adr = (struct AddressDeviceCommandTRB *)command_ring_deque;
+    adr_command_ring_adr[0] = address_device_command(pa_inp_cntx_ptr, 1, 1);
+    doorbells[0]->target = 0;
+    doorbells[0]->stream_id = 0;
+
+    //wait_for_command_ring_not_running();
+    return 0;
 }
 
 
@@ -348,7 +437,8 @@ void xhci_init() {
     // ПРОДОЛЖИТЬ см nvme_init А ЛУЧШЕ дедовский usb
     xhci_settings_init();
 
-    xhci_slots_init();
+    if (xhci_slots_init())
+        panic("Unable to allocate XHCI structures\n");
 }
 
 extern volatile int pci_initial;
@@ -362,5 +452,6 @@ umain(int argc, char **argv) {
     pci_init(argv);
     xhci_init();
     cprintf("***********************END USB***********************\n");
+    while(1){}
 }
 
