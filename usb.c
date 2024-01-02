@@ -6,6 +6,7 @@
 #include "usb/context.h"
 #include "usb/registers.h"
 #include "usb/event_ring.h"
+#include "usb/trb.h"
 
 
 // ПОТОМ ПЕРЕНЕСТИ в pci.h строка 53
@@ -48,8 +49,6 @@ volatile uint64_t * dcbaap;
 volatile uint8_t * device_context[32];
 volatile uint8_t * command_ring_deque;
 
-uint32_t event_ring_segment_table_size = 1;
-uint32_t event_ring_segment_size = 32;
 struct DeviceContext *dcbaa_table_clone[DEVICE_NUMBRER];
 
 
@@ -304,27 +303,24 @@ int xhci_register_init(struct XhciController *ctl) {
 }
 
 void xhci_event_ring_init(){
-    uint32_t erst_size = event_ring_segment_table_size;
-    uint32_t ers_size = event_ring_segment_size;
-
     for (int i=0; i < INTERRUPTER_REGISTER_SET_MAXCOUNT; i++){        
         struct EventRingSegment *erst;
-        int res = sys_alloc_region(CURENVID, erst, erst_size * sizeof(struct EventRingSegment));
+        int res = sys_alloc_region(CURENVID, erst, ERST_SIZE * sizeof(struct EventRingSegment));
 
-        for (int j=0; j < erst_size; j++){
+        for (int j=0; j < ERST_SIZE; j++){
             void *ers;
-            int res = sys_alloc_region(CURENVID, ers, TRB_SIZE * ers_size, PROT_RW);
+            int res = sys_alloc_region(CURENVID, ers, TRB_SIZE * ERS_SIZE, PROT_RW);
             if (res){
                 cprintf("xhci_event_ring_init: sys_alloc_region failed: %i\n", res);
                 return;
             }
 
             erst[j].ring_segment_base_address = ers;
-            erst[j].ring_segment_size = ers_size;
+            erst[j].ring_segment_size = ERS_SIZE;
         }
 
         struct InterrupterRegisterSet irs = run_regs->int_reg_set[i];
-        irs.erstsz = erst_size;
+        irs.erstsz = ERST_SIZE;
         irs.erdp = erst[0].ring_segment_base_address;
         irs.erstba = erst[0].ring_segment_base_address;
 
