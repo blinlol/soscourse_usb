@@ -204,6 +204,13 @@ void print_usb_memory_region() {
 //     }
 }
 
+void print_ports(){
+    uint8_t num_ports = cap_regs->hcsparams1 >> 24;
+    for (uint8_t i=1; i <= num_ports; i++){
+        cprintf("PORTSC[%u] = %x\n", i, *((uint32_t*)((uint8_t*)oper_regs + (0x400 + (0x10 * (i - 1))))));
+    }
+}
+
 int xhci_map(struct XhciController *ctl) {
     //ПЕРЕДЕЛАН МАП ПАМЯТИ
     ctl->mmio_base_addr = (uint8_t*)XHCI_BASE_ADDR;
@@ -233,8 +240,6 @@ int xhci_register_init(struct XhciController *ctl) {
 //    cprintf("!! %d\n",oper_regs->pagesize);
 //    oper_regs->pagesize = 0xFFFFFFFF;
 //    cprintf("!! %d\n",oper_regs->pagesize);
-
-    oper_regs->config = oper_regs->config | 8;
 
     //! Физический адрес взят рандомно
 
@@ -285,12 +290,15 @@ void xhci_settings_init() {
     cprintf("hccparams1 - %x\n", cap_regs->hccparams1);
     volatile uint32_t * xecp_pointer = (uint32_t *)((uint8_t *)cap_regs + (xecp_offset << 2)); 
     volatile uint32_t xecp = xecp_pointer[0];
-    xecp = xecp | (1 << 24);
+    xecp = xecp | (1 << 24);    // what is it?
     cprintf("xecp - %x\n",xecp);
-    cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x400));
-    cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x410));
-    cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x420));
-    cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x430));
+
+    // ???
+    print_ports();
+    // cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x400));
+    // cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x410));
+    // cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x420));
+    // cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x430));
     //*(uint32_t*)(((uint8_t*)(oper_regs))+400) |= 1 << 4;
     //cprintf("PORTSC = %x\n",*(uint32_t*)(((uint8_t*)(oper_regs))+0x400));
 }
@@ -319,6 +327,12 @@ void xhci_slots_init() {
     cprintf("xhci_slots_init() exited\n");
 }
 
+
+void xhci_device_init(){
+
+}
+
+
 void xhci_init() {
     struct XhciController *ctl = &xhci;
     struct PciDevice *pcidevice = find_pci_dev(0x0C, 0x03);
@@ -333,6 +347,7 @@ void xhci_init() {
         panic("Unable to allocate XHCI structures\n");
     // ПРОДОЛЖИТЬ см nvme_init А ЛУЧШЕ дедовский usb
     xhci_settings_init();
+
     xhci_slots_init();
 }
 

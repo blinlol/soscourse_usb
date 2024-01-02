@@ -1,6 +1,8 @@
 #define PACKED     __attribute__((packed))
 #define ALIGNED(n) __attribute__((aligned(n)))
 
+#define TRB_SIZE 16 // bytes
+
 // Transfer TRBs (6.4.1)
 struct NormalTRB{
     uint64_t data_buffer_ptr;
