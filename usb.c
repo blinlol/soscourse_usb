@@ -322,7 +322,7 @@ void xhci_event_ring_init(){
         struct InterrupterRegisterSet irs = run_regs->int_reg_set[i];
         irs.erstsz = ERST_SIZE;
         irs.erdp = erst[0].ring_segment_base_address;
-        irs.erstba = erst[0].ring_segment_base_address;
+        irs.erstba = erst;
 
         run_regs->int_reg_set[i] = irs;
     }
