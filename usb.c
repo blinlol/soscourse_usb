@@ -196,6 +196,11 @@ void print_usb_memory_region() {
 //         }
 //     }
 }
+
+uint32_t get_portsc(int port_id){
+    return *(uint32_t*)(((uint8_t*)(oper_regs))+0x400 + port_id*16);
+}
+
 // "va" and "pa" returns values
 int memory_map( void **va, uintptr_t *pa, size_t size) {
     // всегда мапим по границе страницы, иначе ERROR
@@ -255,7 +260,7 @@ int xhci_register_init(struct XhciController *ctl) {
         if ((res = memory_map((void**)(dcbaa_table_clone+i),&pa,PAGESIZE) ))
             return res;
         dcbaap[i] = pa;
-        memset(&dcbaa_table_clone[i], 0, PAGESIZE);
+        memset(dcbaa_table_clone[i], 0, PAGESIZE);
         cprintf("  ^%p %lx %lx\n",dcbaa_table_clone[i],pa,dcbaap[i]);
     }
     uint32_t scratchpad = (cap_regs->hcsparams2 >> 21) & 0b11111;
@@ -333,7 +338,7 @@ void xhci_settings_init() {
 
     // здесь печать обнаруженных устройств. Если не видите здесь своего устройства - это проблема
     for (int i = 0; i < 8; i++) {
-        uint32_t val = *(uint32_t*)(((uint8_t*)(oper_regs))+0x400 + i*16);
+        uint32_t val = get_portsc(i); // *(uint32_t*)(((uint8_t*)(oper_regs))+0x400 + i*16);
         if ( val != 0x2a0 )
             cprintf("FIND: ");
         cprintf("PORTSC[%d] = %x\n",i,val);
@@ -422,11 +427,26 @@ int xhci_slots_init() {
     return 0;
 }
 
-
-void xhci_device_init(){
-
+void reset_root_hub_port(int port_id){
+    // *(uint32_t*)(((uint8_t*)(oper_regs))+0x400 + port_id*16);
+    uint32_t portsc = get_portsc(port_id);
+    *(uint32_t*)(((uint8_t*)(oper_regs))+0x400 + port_id*16) = portsc | PORTSC_PR;
+    while (!(get_portsc(port_id) | PORTSC_PRC)){}
 }
 
+void enable_slot(int port_id){
+    
+}
+
+void xhci_usb_device_init(){
+    int port_id = 4;
+    // uint32_t portsc = get_portsc(port_id);
+    // if csc == 1 then attached
+    // if usb2: portsc.pr=1
+    //          wait for PortStatusChangeEvent
+    reset_root_hub_port(port_id);
+    int slot_id = enable_slot(port_id);
+}
 
 void xhci_init() {
     struct XhciController *ctl = &xhci;
@@ -444,6 +464,8 @@ void xhci_init() {
     xhci_event_ring_init();
     // ПРОДОЛЖИТЬ см nvme_init А ЛУЧШЕ дедовский usb
     xhci_settings_init();
+
+    xhci_usb_device_init();
 
     if (xhci_slots_init())
         panic("Unable to allocate XHCI structures\n");

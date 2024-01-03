@@ -31,6 +31,12 @@ struct CapabilityRegisters {
 #define DBOFF_MASK  (~((uint32_t)0b11))
 #define RTSOFF_MASK (~((uint32_t)0b11))
 
+
+#define PORTSC_PR (1 << 4)
+#define PORTSC_PRC (1 << 21)
+
+
+
 struct OperationalRegisters {
     volatile uint32_t usbcmd;
     volatile uint32_t usbsts;
