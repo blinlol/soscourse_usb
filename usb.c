@@ -8,7 +8,6 @@
 #include "usb/event_ring.h"
 #include "usb/trb.h"
 
-
 // ПОТОМ ПЕРЕНЕСТИ в pci.h строка 53
 #define XHCI_BASE_ADDR         0x7010000000
 uint8_t *__xhci_current_Va = (void*)XHCI_BASE_ADDR;
@@ -34,7 +33,7 @@ static struct XhciController xhci;
 //     volatile uint8_t rsvdz[3];
 // };
 
-struct DoorbellRegister (*doorbells)[256];
+struct DoorbellRegister * doorbells;
 // TODO: db_array[0] is allocated to host controller for command ring managment
 
 int controller_not_ready() {
@@ -44,158 +43,21 @@ volatile uint8_t * memory_space_ptr;
 volatile uint64_t * dcbaap;
 volatile uint8_t * device_context[32];
 volatile uint8_t * command_ring_deque;
+volatile uint8_t * command_ring_enqueue;
+volatile bool pcs;
+
+volatile struct InputContext *input_context;
+volatile struct TransferTRB *transfer_ring;
+
 
 struct DeviceContext *dcbaa_table_clone[DEVICE_NUMBRER];
 
 
+struct EventRingSegment *event_ring_segment_table;
+struct EventRing {
+    struct TRBTemplate trb[ERS_SIZE];
+} *event_ring;
 
-void print_usb_memory_region() {
-    // cprintf("Capability Registers:\n");
-    // cprintf("CAPLENGTH: %d\n", cap_regs->caplength);
-    // cprintf("HCIVERSION: %x\n", cap_regs->hciversion);
-    // cprintf("HCSPARAMS1: %x\n", cap_regs->hcsparams1);
-    // cprintf("HCSPARAMS2: %x\n", cap_regs->hcsparams2);
-    // cprintf("HCSPARAMS3: %x\n", cap_regs->hcsparams3);
-    // cprintf("HCCPARAMS1: %x\n", cap_regs->hccparams1);
-    // cprintf("DBOFF: %x\n", cap_regs->dboff);
-    // cprintf("RTSOFF: %x\n", cap_regs->rtsoff);
-    // cprintf("HCCPARAMS2: %x\n", cap_regs->hccparams2);
-    // cprintf("\n");
-    // cprintf("Operational Registers:\n");
-    // cprintf("USBCMD: %x\n", oper_regs->usbcmd);
-    // cprintf("USBSTS: %x\n", oper_regs->usbsts);
-    // cprintf("PAGESIZE: %x\n", oper_regs->pagesize);
-    // cprintf("DNCTRL: %x\n", oper_regs->dnctrl);
-    // cprintf("CRCR: %lx\n", oper_regs->crcr);
-    // cprintf("DCBAAP: %lx\n", oper_regs->dcbaap);
-    // cprintf("CONFIG: %x\n", oper_regs->config);
-    // cprintf("\n");
-//     for (int i = 0; i < 8; i++) {
-//         volatile uint32_t portsc = get_portsc(i+1);
-//         if ((portsc & (1 << 0)) >> 0) {
-//             cprintf("PORTSC %d  - %08x\n", i+1, portsc);
-//             cprintf("  CCS(connect status): %x\n", (portsc & (1 << 0)) >> 0);
-//             cprintf("  PED(port en/dis): %x\n", (portsc & (1 << 1)) >> 1);
-//             cprintf("  PLS(link state): %x\n", (portsc & (0xF << 5)) >> 5);
-//             cprintf("  PP(port power): %x\n", (portsc & (1 << 9)) >> 9);
-//             cprintf("  Port speed: %x\n", (portsc & (0xF << 10)) >> 10);
-//             cprintf("  Port indicator control: %x\n", (portsc & (0x3 << 14)) >> 14);
-//             cprintf("  LWS(link state write strobe): %x\n", (portsc & (1 << 16)) >> 16);
-//             cprintf("  CSC(connect status change): %x\n", (portsc & (1 << 17)) >> 17);
-//             cprintf("  PEC(port en/dis change): %x\n", (portsc & (1 << 18)) >> 18);
-//         }
-//     }
-//     cprintf("\n");
-//     for (int i = 0; i < 8; i++) {
-//         cprintf("Doorbell register %d: %08x\n", i, doorbells->dbreg[i]);
-//     }
-//     volatile uint16_t xecp_offset = (cap_regs->hccparams1 >> 16);
-//     //cprintf("hccparams1 - %08x\n", cap_regs->hccparams1);
-//     cprintf("xecp offset - %08x\n", xecp_offset);
-//     volatile uint8_t * xecp_pointer = ((uint8_t *)cap_regs + (xecp_offset << 2));
-//     cprintf("\nExtended capability:\n");
-//     cprintf("    ID: %02x\n", xecp_pointer[0]);
-//     cprintf("    next cap ptr: %02x\n", xecp_pointer[1]);
-//     cprintf("    BIOS semaphore + rsvd: %02x\n", xecp_pointer[2]);
-//     cprintf("    OS semaphore + rsvd: %02x\n", xecp_pointer[3]);
-//     cprintf("\n");
-//     cprintf("Command ring dequeue ptr: %016lx\n", ((uint64_t)command_ring_deque));
-//     cprintf("Command ring dequeue: ");
-//     for (int i = 0; i < 16; i++) {
-//         cprintf("%02x", command_ring_deque[i]);
-//     }
-//     cprintf("\n");
-//     cprintf("Device context base address array:\n");
-//     for (int i = 0; i < 10; i++) {
-//         cprintf("  %02x -- %08x\n", i * 4, ((uint32_t *)dcbaap)[i]);
-//     }
-//     cprintf("\n");
-//     cprintf("Runtime registers:\n");
-//     cprintf("MFINDEX: %08x\n", run_regs->mfindex);
-//     for (int i = 0; i < 1; i++) {
-//         cprintf("  Int reg set: %d\n", i);
-//         cprintf("    inter manag %08x\n", run_regs->int_reg_set[i].iman);
-//         cprintf("    inter moder %08x\n", run_regs->int_reg_set[i].imod);
-//         cprintf("    tab size %08x\n", run_regs->int_reg_set[i].erstsz);
-//         cprintf("    tab addr %016lx\n", run_regs->int_reg_set[i].erstba);
-//         cprintf("    deque ptr %016lx\n", run_regs->int_reg_set[i].erdp);
-//     }
-//     cprintf("Event ring segment table:\n");
-//     for (int i = 0; i < event_ring_segment_table_size; i++) {
-//         cprintf("  %016lx - %d\n", event_ring_segment_table[i].ring_segment_base_address, event_ring_segment_table[i].ring_segment_size);
-//         //for (int j = 0; j < event_ring_segment_table[i].ring_segment_size; j++) {
-//         //    cprintf("    ")
-//         //}
-//     }
-//     //struct CommandCompletionTRB cc_trb = ((struct CommandCompletionTRB *)event_ring_segment_base_address)[1];
-//     cprintf("Event ring deque ptr: %016lx\n", (uint64_t)event_ring_deque);
-//     cprintf("\nCommand Completion:\n");
-//     for (int i = 0; i < 128; i++) {
-//         struct CommandCompletionTRB cc_trb = ((struct CommandCompletionTRB *)event_ring_segment_base_address)[i];
-//         if (cc_trb.command_trb_ptr != 0) {
-//             cprintf("TRB #%d\n", i);
-//             cprintf("Address: %016lx\n", (uint64_t)((struct CommandCompletionTRB *)event_ring_segment_base_address + i));
-//             cprintf("CommandTRB ptr: %016lx\n", cc_trb.command_trb_ptr);
-//             cprintf("Compl code part: %08x\n", cc_trb.completion_code);
-//             cprintf("TRB type: %08x\n", cc_trb.trb_type / 4);
-//             cprintf("VF ID: %08x\n", cc_trb.vf_id);
-//             cprintf("Slot ID: %08x\n", cc_trb.slot_id);
-//         }
-//     }
-//     cprintf("\n");
-//     cprintf("Device context:\n");
-//     struct DeviceContext * dev_cont_ptr = (void *)device_context[1];
-//     cprintf("  Slot context:\n");
-//     cprintf("    Route string: %x\n", dev_cont_ptr->slot_context.first_row & 0xFFFFF);
-//     cprintf("    Speed: %x\n", (dev_cont_ptr->slot_context.first_row & (0xF << 20)) >> 20);
-//     cprintf("    MTT: %x\n", (dev_cont_ptr->slot_context.first_row & (0x1 << 25)) >> 25);
-//     cprintf("    Hub: %x\n", (dev_cont_ptr->slot_context.first_row & (0x1 << 26)) >> 26);
-//     cprintf("    Context entries: %x\n", (dev_cont_ptr->slot_context.first_row & (0x1F << 27)) >> 27);
-//     cprintf("    Max exit latency: %x\n", dev_cont_ptr->slot_context.max_exit_latency);
-//     cprintf("    Root hub port number: %x\n", dev_cont_ptr->slot_context.root_hub_port_number);
-//     cprintf("    Number of ports: %x\n", dev_cont_ptr->slot_context.number_of_ports);
-//     cprintf("    USB device address: %x\n", dev_cont_ptr->slot_context.usb_device_address);
-//     cprintf("    Slot state: %x\n", dev_cont_ptr->slot_context.slot_state >> 4);
-//     for (int i = 0; i < 6; i++) {
-//         cprintf("  Endpoint context #%d\n", i);
-//         cprintf("    EP state: %08x\n", dev_cont_ptr->endpoint_context[i].ep_state);
-//         cprintf("    Mult: %08x\n", dev_cont_ptr->endpoint_context[i].mult_and_max_p_streams & 0x3);
-//         cprintf("    MaxPStreams: %08x\n", dev_cont_ptr->endpoint_context[i].mult_and_max_p_streams & (0x1F << 2) >> 2);
-//         cprintf("    LSA: %x\n", dev_cont_ptr->endpoint_context[i].mult_and_max_p_streams & (0x1 << 7) >> 7);
-//         cprintf("    Interval: %08x\n", dev_cont_ptr->endpoint_context[i].interval);
-//         cprintf("    Transfer ring deque ptr: %016lx\n", dev_cont_ptr->endpoint_context[i].transfer_ring_deque_ptr);
-//         if (dev_cont_ptr->endpoint_context[i].transfer_ring_deque_ptr) {
-//             cprintf("      ");
-//             print_transfer_trb_structure((void *)dev_cont_ptr->endpoint_context[i].transfer_ring_deque_ptr + 0x8040000000 - (dev_cont_ptr->endpoint_context[i].transfer_ring_deque_ptr & 1));
-//         }
-//     }
-//     cprintf("Input slot context:\n");
-//     volatile struct InputContext * inp_cont_ptr = &(input_context);
-//     cprintf("  Slot context:\n");
-//     cprintf("    Route string: %x\n", inp_cont_ptr->slot_context.first_row & 0xFFFFF);
-//     cprintf("    Speed: %x\n", (inp_cont_ptr->slot_context.first_row & (0xF << 20)) >> 20);
-//     cprintf("    MTT: %x\n", (inp_cont_ptr->slot_context.first_row & (0x1 << 25)) >> 25);
-//     cprintf("    Hub: %x\n", (inp_cont_ptr->slot_context.first_row & (0x1 << 26)) >> 26);
-//     cprintf("    Context entries: %x\n", (inp_cont_ptr->slot_context.first_row & (0x1F << 27)) >> 27);
-//     cprintf("    Max exit latency: %x\n", inp_cont_ptr->slot_context.max_exit_latency);
-//     cprintf("    Root hub port number: %x\n", inp_cont_ptr->slot_context.root_hub_port_number);
-//     cprintf("    Number of ports: %x\n", inp_cont_ptr->slot_context.number_of_ports);
-//     cprintf("    USB device address: %x\n", inp_cont_ptr->slot_context.usb_device_address);
-//     cprintf("    Slot state: %x\n", inp_cont_ptr->slot_context.slot_state >> 4);
-//     for (int i = 0; i < 6; i++) {
-//         cprintf("  Endpoint context #%d\n", i);
-//         cprintf("    EP state: %08x\n", inp_cont_ptr->endpoint_context[i].ep_state);
-//         cprintf("    Mult: %08x\n", inp_cont_ptr->endpoint_context[i].mult_and_max_p_streams & 0x3);
-//         cprintf("    MaxPStreams: %08x\n", inp_cont_ptr->endpoint_context[i].mult_and_max_p_streams & (0x1F << 2) >> 2);
-//         cprintf("    LSA: %x\n", inp_cont_ptr->endpoint_context[i].mult_and_max_p_streams & (0x1 << 7) >> 7);
-//         cprintf("    Interval: %08x\n", inp_cont_ptr->endpoint_context[i].interval);
-//         cprintf("    Transfer ring deque ptr: %016lx\n", inp_cont_ptr->endpoint_context[i].transfer_ring_deque_ptr);
-//         if (inp_cont_ptr->endpoint_context[i].transfer_ring_deque_ptr) {
-//             cprintf("      ");
-//             print_transfer_trb_structure((void *)inp_cont_ptr->endpoint_context[i].transfer_ring_deque_ptr + 0x8040000000 - (inp_cont_ptr->endpoint_context[i].transfer_ring_deque_ptr & 1));
-//         }
-//     }
-}
 
 uint32_t get_portsc(int port_id){
     return *(uint32_t*)(((uint8_t*)(oper_regs))+0x400 + port_id*16);
@@ -278,16 +140,12 @@ int xhci_register_init(struct XhciController *ctl) {
     if ((res = memory_map((void**)(&command_ring_deque),&pa,size)))
         return res;
     oper_regs->crcr = pa | (oper_regs->crcr & 0b111111);
+    pcs = 1;
+    command_ring_enqueue = command_ring_deque;
     cprintf("^%p %lx\n\n",command_ring_deque,oper_regs->crcr & ZERO_MASK_64(0b111111));
 
     return 0;
 }
-
-
-struct EventRingSegment *event_ring_segment_table;
-struct EventRing {
-    struct TRBTemplate trb[ERS_SIZE];
-} *event_ring;
 
 int xhci_event_ring_init(){
     // выделим 16 Kib для таблицы, потом переприсвоим erstba
@@ -354,9 +212,6 @@ void wait_for_command_ring_running() {
     while (oper_regs->crcr & (1 << 3)) { cprintf("-\n"); }
 }
 
-volatile struct InputContext *input_context;
-volatile struct TransferTRB *transfer_ring;
-
 struct AddressDeviceCommandTRB address_device_command(uint64_t input_context_ptr, uint8_t slot_id, bool cycle_bit) {
     struct AddressDeviceCommandTRB adr_trb;
     adr_trb.slot_id = slot_id;
@@ -420,12 +275,99 @@ int xhci_slots_init() {
 
     struct AddressDeviceCommandTRB * adr_command_ring_adr = (struct AddressDeviceCommandTRB *)command_ring_deque;
     adr_command_ring_adr[0] = address_device_command(pa_inp_cntx_ptr, 1, 1);
-    doorbells[0]->target = 0;
-    doorbells[0]->stream_id = 0;
+    doorbells[0].target = 0;
+    doorbells[0].stream_id = 0;
 
     //wait_for_command_ring_not_running();
     return 0;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+struct NoOpCommandTRB {
+    uint32_t rsvdz0[3];
+    
+    bool c: 1;
+    uint16_t rsvdz1: 9;
+    uint8_t type: 6;
+    uint8_t slot_type: 5;
+    uint16_t rsvdz2: 11;
+} PACKED;
+
+
+struct CommandCompletionEventTRB {
+    // uint8_t rsvdz0: 4;
+    uint64_t command_trb_ptr;
+
+    uint32_t command_completion_parameter: 24;
+    uint8_t completino_code;
+
+    bool c: 1;
+    uint16_t rsvdz0: 9;
+    uint8_t type: 6;
+    uint8_t vf_id;
+    uint8_t slot_id;
+} PACKED;
+
+
+uint8_t* place_command(struct TRBTemplate trb){
+    cprintf("place_command\n");
+    trb.control = trb.control | pcs;
+    *((struct TRBTemplate*)command_ring_enqueue) = trb;
+    command_ring_enqueue = (uint8_t*)command_ring_enqueue + TRB_SIZE;
+
+    return command_ring_enqueue - TRB_SIZE;
+
+    // TODO: check if the ring is full (4.9.2.2)
+}
+
+void ring_hc_doorbell(){
+    cprintf("ring_hc_doorbell\n");
+    struct DoorbellRegister db;
+    db.target = 1;
+    db.stream_id = 0;
+    doorbells[0] = db;
+}
+
+void wait_command_completion(uint8_t* cmd_ptr){
+    /* The Command TRB Pointer field of the Command Completion Event shall point to
+       the Command TRB that initiated the event
+
+       The Primary Event Ring receives all Command Completion Events.
+    */
+
+    for (int i=0; i<INTERRUPTER_REGISTER_SET_MAXCOUNT; i++){
+        struct InterrupterRegisterSet irs = run_regs->int_reg_set[i];
+        for (int j=0; j < irs.erstsz; j++){
+            struct EventRingSegment = ((struct EventRingSegment*)irs.erstba)[j];
+        }
+    }
+
+}
+
+void command_ring_test(){
+    struct NoOpCommandTRB trb;
+    uint8_t* cmd_ptr = place_command(*(struct TRBTemplate*)&trb);
+    ring_hc_doorbell();
+    wait_command_completion(cmd_ptr);
+}
+
+
+
+
+
+
+
 
 void reset_root_hub_port(int port_id){
     // *(uint32_t*)(((uint8_t*)(oper_regs))+0x400 + port_id*16);
@@ -439,13 +381,15 @@ void enable_slot(int port_id){
 }
 
 void xhci_usb_device_init(){
-    int port_id = 4;
-    // uint32_t portsc = get_portsc(port_id);
-    // if csc == 1 then attached
-    // if usb2: portsc.pr=1
-    //          wait for PortStatusChangeEvent
-    reset_root_hub_port(port_id);
-    int slot_id = enable_slot(port_id);
+    // int port_id = 4;
+    // // uint32_t portsc = get_portsc(port_id);
+    // // if csc == 1 then attached
+    // // if usb2: portsc.pr=1
+    // //          wait for PortStatusChangeEvent
+    // reset_root_hub_port(port_id);
+    // int slot_id = enable_slot(port_id);
+
+    command_ring_test();
 }
 
 void xhci_init() {
@@ -457,7 +401,6 @@ void xhci_init() {
     ctl->pcidev = pcidevice;
     if (xhci_map(ctl) )
         panic("XHCI device not found\n");
-    print_usb_memory_region();
     if (xhci_register_init(ctl))
         panic("Unable to allocate XHCI structures\n");
 
