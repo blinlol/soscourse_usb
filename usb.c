@@ -225,8 +225,43 @@ struct AddressDeviceCommandTRB address_device_command(uint64_t input_context_ptr
     return adr_trb;
 }
 
+struct CommandCompletionEventTRB {
+    uint64_t command_trb_ptr; // without 4 last bits
+    uint32_t command_completion_parameter; // 24 + 8
+    uint32_t flags;
+};
+
+struct EnableSlotCommandTRB {
+   uint32_t rsrvd[3];
+   uint32_t flags;
+};
+
+void init_dev(volatile struct EnableSlotCommandTRB *trb, int cycle_bit) {
+    memset((void*)trb,0,sizeof(struct EnableSlotCommandTRB));
+    trb->flags |= 9 << 10; //code of "enable slots"
+    if (cycle_bit)
+        trb->flags += 1;
+}
+
+void ring_hc_doorbell(){
+    cprintf("ring_hc_doorbell\n");
+    struct DoorbellRegister db;
+    db.target = 1;
+    db.stream_id = 0;
+    doorbells[0] = db;
+}
+
 int xhci_slots_init() {
-    size_t size = sizeof(struct InputContext);
+    // ВОЗМОЖНО это должно быть так
+    init_dev((void*)command_ring_deque, 0);
+    volatile struct CommandCompletionEventTRB *trb = (volatile void*)command_ring_deque;
+    cprintf("  > %lx %x %x\n",trb->command_trb_ptr,trb->command_completion_parameter,trb->flags);
+    ring_hc_doorbell();
+    wait_for_command_ring_running();
+    cprintf("  > %lx %x %x\n",trb->command_trb_ptr,trb->command_completion_parameter,trb->flags);
+    return 0;
+
+/*    size_t size = sizeof(struct InputContext);
     uintptr_t pa_inp_cntx_ptr;
     int res;
     if ((res = memory_map((void**)(&input_context),&pa_inp_cntx_ptr,size)))
@@ -279,7 +314,7 @@ int xhci_slots_init() {
     doorbells[0].stream_id = 0;
 
     //wait_for_command_ring_not_running();
-    return 0;
+    return 0;*/
 }
 
 
@@ -305,38 +340,15 @@ struct NoOpCommandTRB {
 } PACKED;
 
 
-struct CommandCompletionEventTRB {
-    // uint8_t rsvdz0: 4;
-    uint64_t command_trb_ptr;
-
-    uint32_t command_completion_parameter: 24;
-    uint8_t completino_code;
-
-    bool c: 1;
-    uint16_t rsvdz0: 9;
-    uint8_t type: 6;
-    uint8_t vf_id;
-    uint8_t slot_id;
-} PACKED;
-
-
 uint8_t* place_command(struct TRBTemplate trb){
     cprintf("place_command\n");
     trb.control = trb.control | pcs;
     *((struct TRBTemplate*)command_ring_enqueue) = trb;
     command_ring_enqueue = (uint8_t*)command_ring_enqueue + TRB_SIZE;
 
-    return command_ring_enqueue - TRB_SIZE;
+    return (uint8_t*)command_ring_enqueue - TRB_SIZE;
 
     // TODO: check if the ring is full (4.9.2.2)
-}
-
-void ring_hc_doorbell(){
-    cprintf("ring_hc_doorbell\n");
-    struct DoorbellRegister db;
-    db.target = 1;
-    db.stream_id = 0;
-    doorbells[0] = db;
 }
 
 void wait_command_completion(uint8_t* cmd_ptr){
@@ -346,18 +358,18 @@ void wait_command_completion(uint8_t* cmd_ptr){
        The Primary Event Ring receives all Command Completion Events.
     */
 
-    for (int i=0; i<INTERRUPTER_REGISTER_SET_MAXCOUNT; i++){
+    /*for (int i=0; i<INTERRUPTER_REGISTER_SET_MAXCOUNT; i++){
         struct InterrupterRegisterSet irs = run_regs->int_reg_set[i];
-        for (int j=0; j < irs.erstsz; j++){
-            struct EventRingSegment = ((struct EventRingSegment*)irs.erstba)[j];
+        for (int j=0; j < irs.erstsz.erstsz; j++){
+            struct EventRingSegment ers = ((struct EventRingSegment*)irs.erstba)[j];
         }
-    }
+    }*/
 
 }
 
 void command_ring_test(){
     struct NoOpCommandTRB trb;
-    uint8_t* cmd_ptr = place_command(*(struct TRBTemplate*)&trb);
+    uint8_t* cmd_ptr = place_command(*((struct TRBTemplate*)(&trb)));
     ring_hc_doorbell();
     wait_command_completion(cmd_ptr);
 }
@@ -388,7 +400,11 @@ void xhci_usb_device_init(){
     // //          wait for PortStatusChangeEvent
     // reset_root_hub_port(port_id);
     // int slot_id = enable_slot(port_id);
-
+    volatile uint32_t *portsc = (uint32_t*)(((uint8_t*)(oper_regs))+0x400 + 4*16);
+    cprintf("> %x\n",*portsc);
+    *portsc |= 1 << 4;
+    while ( ((*portsc) & (1<<21)) == 0 ) {}
+    cprintf("> %x\n",*portsc);
     command_ring_test();
 }
 
