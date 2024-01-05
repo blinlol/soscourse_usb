@@ -1,10 +1,20 @@
+/*
+В этом файле описаны все регистры xHCI из пункта 5 спецификации
+*/
+
+
 #define PACKED     __attribute__((packed))
 #define ALIGNED(n) __attribute__((aligned(n)))
 
 #define ZERO_MASK_64(digit) (~((uint64_t)(digit)))
 #define ZERO_MASK_32(digit) (~((uint32_t)(digit)))
 
-// это сама работа с xhci
+/*
+These registers specify the limits and capabilities of the host controller
+implementation.
+All Capability Registers are Read-Only (RO). The offsets for these registers are
+all relative to the beginning of the host controller’s MMIO address space. 
+*/
 struct CapabilityRegisters {
     volatile uint8_t caplength;
     volatile uint8_t rsvd0;
@@ -36,7 +46,15 @@ struct CapabilityRegisters {
 #define PORTSC_PRC (1 << 21)
 
 
-
+/*
+The base address of this register space is referred to as Operational Base. The
+Operational Base shall be Dword aligned and is calculated by adding the value
+of the Capability Registers Length (CAPLENGTH) register (refer to Section 5.3.1)
+to the Capability Base address. All registers are multiples of 32 bits in length.
+Unless otherwise stated, all registers should be accessed as a 32 -bit width on
+reads with an appropriate software mask, if needed. A software
+read/modify/write mechanism should be invoked for partial writes.
+*/
 struct OperationalRegisters {
     volatile uint32_t usbcmd;
     volatile uint32_t usbsts;
@@ -76,7 +94,12 @@ struct PortRegisterSet {
 
 // TODO: add other constants (5.4.2 - 5.4.11)
 
-
+/*
+The Interrupter logic consists of an Interrupter Management Register, an
+Interrupter Moderation Register, and the Event Ring Registers. A one to one
+mapping is defined for Interrupter to MSI-X vector. Up to 1024 Interrupters are
+supported.
+*/
 struct InterrupterRegisterSet {
     volatile uint32_t iman; //RW, only 0 and 1 bits
     volatile struct {
@@ -95,6 +118,20 @@ struct InterrupterRegisterSet {
 #define IMAN_IP 0
 #define IMAN_IE 1
 
+
+/*
+The Doorbell Array is organized as an array of up to 256 Doorbell Registers. One
+32-bit Doorbell Register is defined in the array for each Device Slot. System
+software utilizes the Doorbell Register to notify the xHC that it has Device Slot
+related work for the xHC to perform.
+The number of Doorbell Registers implemented by a particular instantiation of a
+host controller is documented in the Number of Device Slots (MaxSlots) field of
+the HCSPARAMS1 register (section 5.3.3).
+These registers are pointed to by the Doorbell Offset Register (DBOFF) in the
+xHC Capability register space. The Doorbell Array base address shall be Dword
+aligned and is calculated by adding the value in the DBOFF register (section
+5.3.7) to “Base” (the base address of the xHCI Capability register address space).
+*/
 struct DoorbellRegister {
     uint8_t target;
     uint8_t rsvd;
@@ -104,6 +141,14 @@ struct DoorbellRegister {
 
 #define INTERRUPTER_REGISTER_SET_MAXCOUNT 1024
 
+
+/*
+The base address of this
+register space is referred to as Runtime Base. The Runtime Base shall be 32-
+byte aligned and is calculated by adding the value Runtime Register Space
+Offset register (refer to Section 5.3.8) to the Capability Base address. All
+Runtime registers are multiples of 32 bits in length.
+*/
 struct RuntimeRegisters {
     volatile uint32_t mfindex;
     volatile uint32_t rsvdz[7];

@@ -8,11 +8,17 @@
 #include "usb/event_ring.h"
 #include "usb/trb.h"
 
+/*
+нам нужно работать с памятью только по виртуальным адресам,
+при этом нужно использовать mmio для регистров xhci,
+поэтому мы последовательно будем алоцировать структуры
+по адресам, которые мы храним
+*/
 // ПОТОМ ПЕРЕНЕСТИ в pci.h строка 53
+#define PAGESIZE 4096
 #define XHCI_BASE_ADDR         0x7010000000
 uint8_t *__xhci_current_Va = (void*)XHCI_BASE_ADDR;
 uintptr_t __xhci_current_Pa;
-#define PAGESIZE 4096
 
 //used already
 #define XHCI_MAX_MAP_MEM 0x4000
@@ -26,41 +32,66 @@ struct XhciController {
     volatile uint8_t *mmio_base_addr;
     volatile uint8_t *buffer;
 };
+
+struct EventRing {
+    struct TRBTemplate trb[ERS_SIZE];
+} * event_ring;
+
+struct NoOpCommandTRB {
+    uint32_t rsvdz0[3];
+    
+    bool c: 1;
+    uint16_t rsvdz1: 9;
+    uint8_t type: 6;
+    uint8_t slot_type: 5;
+    uint16_t rsvdz2: 11;
+} PACKED;
+
+struct CommandCompletionEventTRB {
+    uint64_t command_trb_ptr; // without 4 last bits
+    uint32_t command_completion_parameter; // 24 + 8
+    uint32_t flags;
+};
+
+struct EnableSlotCommandTRB {
+   uint32_t rsrvd[3];
+   uint32_t flags;
+};
+
 static struct XhciController xhci;
-// struct EventRingSegment {
-//     volatile uint64_t ring_segment_base_address;
-//     volatile uint8_t ring_segment_size;
-//     volatile uint8_t rsvdz[3];
-// };
-
 struct DoorbellRegister * doorbells;
-// TODO: db_array[0] is allocated to host controller for command ring managment
-
-int controller_not_ready() {
-    return (oper_regs->usbsts & (1 << 11)) >> 11;
-}
 volatile uint8_t * memory_space_ptr;
 volatile uint64_t * dcbaap;
 volatile uint8_t * device_context[32];
 volatile uint8_t * command_ring_deque;
 volatile uint8_t * command_ring_enqueue;
 volatile bool pcs;
+struct EventRingSegment *event_ring_segment_table;
 
 volatile struct InputContext *input_context;
 volatile struct TransferTRB *transfer_ring;
 
-
 struct DeviceContext *dcbaa_table_clone[DEVICE_NUMBRER];
-
-
-struct EventRingSegment *event_ring_segment_table;
-struct EventRing {
-    struct TRBTemplate trb[ERS_SIZE];
-} *event_ring;
 
 
 uint32_t get_portsc(int port_id){
     return *(uint32_t*)(((uint8_t*)(oper_regs))+0x400 + port_id*16);
+}
+
+// check usbsts.cnr bit
+int controller_not_ready() {
+    return (oper_regs->usbsts & (1 << 11)) >> 11;
+}
+
+/*
+check oper_regs.crcr.crr bit
+*/
+void wait_for_command_ring_not_running() {
+    while ((oper_regs->crcr & (1 << 3)) == 0) {}
+}
+
+void wait_for_command_ring_running() {
+    while (oper_regs->crcr & (1 << 3)) { cprintf("-\n"); }
 }
 
 // "va" and "pa" returns values
@@ -87,6 +118,10 @@ int xhci_map(struct XhciController *ctl) {
     //now, ctl->mmio_base_address is initialized
 }
 
+/*
+initialize mmio registers
+(figure 3-3)
+*/
 int xhci_register_init(struct XhciController *ctl) {
     __xhci_current_Pa = 0x1000000;
     uint8_t *memory_space_ptr = (uint8_t*)ctl->mmio_base_addr;
@@ -101,10 +136,9 @@ int xhci_register_init(struct XhciController *ctl) {
     while(controller_not_ready()) {}
 
     // small check: read-only registers can't be rewrited
-//    cprintf("!! %d\n",oper_regs->pagesize);
-//    oper_regs->pagesize = 0xFFFFFFFF;
-//    cprintf("!! %d\n",oper_regs->pagesize);
-
+    //    cprintf("!! %d\n",oper_regs->pagesize);
+    //    oper_regs->pagesize = 0xFFFFFFFF;
+    //    cprintf("!! %d\n",oper_regs->pagesize);
 
     // этому 2048 с выравниванием по 6
     // но мапится всё равно целое число страниц, поэтому так
@@ -148,6 +182,10 @@ int xhci_register_init(struct XhciController *ctl) {
 }
 
 int xhci_event_ring_init(){
+    /*
+    allocate memory for ERST and write its address to run_regs.IRS
+    */
+
     // выделим 16 Kib для таблицы, потом переприсвоим erstba
     // НО sizeof(struct EventRingSegment) = 16, а выравнивание erstba - 64
     // надо выделить 64 кб, тк 1024 с шагом 64
@@ -204,14 +242,6 @@ void xhci_settings_init() {
     cprintf("\n");
 }
 
-void wait_for_command_ring_not_running() {
-    while ((oper_regs->crcr & (1 << 3)) == 0) {}
-}
-
-void wait_for_command_ring_running() {
-    while (oper_regs->crcr & (1 << 3)) { cprintf("-\n"); }
-}
-
 struct AddressDeviceCommandTRB address_device_command(uint64_t input_context_ptr, uint8_t slot_id, bool cycle_bit) {
     struct AddressDeviceCommandTRB adr_trb;
     adr_trb.slot_id = slot_id;
@@ -224,17 +254,6 @@ struct AddressDeviceCommandTRB address_device_command(uint64_t input_context_ptr
     }
     return adr_trb;
 }
-
-struct CommandCompletionEventTRB {
-    uint64_t command_trb_ptr; // without 4 last bits
-    uint32_t command_completion_parameter; // 24 + 8
-    uint32_t flags;
-};
-
-struct EnableSlotCommandTRB {
-   uint32_t rsrvd[3];
-   uint32_t flags;
-};
 
 void init_dev(volatile struct EnableSlotCommandTRB *trb, int cycle_bit) {
     memset((void*)trb,0,sizeof(struct EnableSlotCommandTRB));
@@ -317,29 +336,9 @@ int xhci_slots_init() {
     return 0;*/
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-struct NoOpCommandTRB {
-    uint32_t rsvdz0[3];
-    
-    bool c: 1;
-    uint16_t rsvdz1: 9;
-    uint8_t type: 6;
-    uint8_t slot_type: 5;
-    uint16_t rsvdz2: 11;
-} PACKED;
-
-
+/*
+place command trb to command ring
+*/
 uint8_t* place_command(struct TRBTemplate trb){
     cprintf("place_command\n");
     trb.control = trb.control | pcs;
@@ -374,13 +373,6 @@ void command_ring_test(){
     wait_command_completion(cmd_ptr);
 }
 
-
-
-
-
-
-
-
 void reset_root_hub_port(int port_id){
     // *(uint32_t*)(((uint8_t*)(oper_regs))+0x400 + port_id*16);
     uint32_t portsc = get_portsc(port_id);
@@ -388,10 +380,9 @@ void reset_root_hub_port(int port_id){
     while (!(get_portsc(port_id) | PORTSC_PRC)){}
 }
 
-void enable_slot(int port_id){
-    
-}
-
+/*
+(4.3)
+*/
 void xhci_usb_device_init(){
     // int port_id = 4;
     // // uint32_t portsc = get_portsc(port_id);
@@ -408,6 +399,10 @@ void xhci_usb_device_init(){
     command_ring_test();
 }
 
+/*
+initialize all xhci registers and trb rings
+(4.2)
+*/
 void xhci_init() {
     struct XhciController *ctl = &xhci;
     struct PciDevice *pcidevice = find_pci_dev(0x0C, 0x03);

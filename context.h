@@ -1,6 +1,12 @@
+/*
+В этом файле реализованы все структуры контекстов из пункта 6.2
+*/
+
 #define PACKED     __attribute__((packed))
 #define ALIGNED(n) __attribute__((aligned(n)))
 
+// The Slot Context data structure defines information 
+// that applies to a device as a whole.
 struct SlotContext{
     /*uint32_t route_string: 20;
     uint8_t speed: 4;
@@ -58,6 +64,11 @@ struct SlotContext{
     uint32_t rsvdo[3];
 } PACKED;*/
 
+
+/*
+  The Endpoint Context data structure defines information 
+  that applies to a specific endpoint.
+*/
 struct EndpointContext {
     uint8_t ep_state;
     uint8_t maxPStreams;
@@ -76,6 +87,11 @@ struct EndpointContext {
     uint32_t rsvdo[3];
 };
 
+/*
+The Input Control Context data structure defines which Device Context data
+structures are affected by a command and the operations to be performed on
+those contexts.
+*/
 struct InputControlContext {
     // 1:0 - rsvdz0
     uint32_t drop_context_flags;
@@ -87,6 +103,11 @@ struct InputControlContext {
     uint8_t rsvdz0;
 };
 
+
+/*
+The Stream Context data structure defines information that applies to a specific
+Stream associated with an endpoint.
+*/
 struct StreamContext {
     /*bool dcs: 1;
     uint8_t sct: 3;
@@ -103,6 +124,12 @@ struct StreamContext {
 // remaining same as in DeviceContext
 // struct EndpointContext InputContext[33];
 
+/*
+The Device Context data structure consists of up to 32 entries. The first entry
+(entry_0) is the Slot Context data structure and the remaining entries are
+Endpoint Context data structures. The Context Entries field in the Slot Context
+identifies the number of entries in the Device Context.
+*/
 struct DeviceContext {
     struct SlotContext slot_context;
     struct EndpointContext endpoint_context[31];
@@ -111,11 +138,26 @@ struct DeviceContext {
 
 //not checked yet
 
+
+/*
+The Input Context data structure specifies the endpoints and the operations to
+be performed on those endpoints by the Address Device, Configure Endpoint,
+and Evaluate Context Commands.
+*/
 struct InputContext {
     struct InputControlContext input_control_context;
     struct SlotContext slot_context;
     struct EndpointContext endpoint_context[31];
 };
+
+
+
+
+
+
+
+
+
 
 struct TransferTRB {
     volatile uint64_t trb_pointer;
