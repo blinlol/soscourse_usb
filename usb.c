@@ -14,16 +14,15 @@
 поэтому мы последовательно будем алоцировать структуры
 по адресам, которые мы храним
 */
-// ПОТОМ ПЕРЕНЕСТИ в pci.h строка 53
+
 #define PAGESIZE 4096
 #define XHCI_BASE_ADDR         0x7010000000
 uint8_t *__xhci_current_Va = (void*)XHCI_BASE_ADDR;
 uintptr_t __xhci_current_Pa;
 
-//used already
 #define XHCI_MAX_MAP_MEM 0x4000
-#define XHCI_RING_DEQUE_MEM 4096 //why 4096?
-#define DEVICE_NUMBRER 8 // вот я хочу 8 устройств, этого в целом достаточно
+#define XHCI_RING_DEQUE_MEM 4096
+#define DEVICE_NUMBRER 8
 #define COMMAND_RING_DEQUE_SIZE 4096
 
 //аналогично nvme
@@ -118,10 +117,7 @@ int xhci_map(struct XhciController *ctl) {
     //now, ctl->mmio_base_address is initialized
 }
 
-/*
-initialize mmio registers
-(figure 3-3)
-*/
+/* initialize mmio registers (figure 3-3) */
 int xhci_register_init(struct XhciController *ctl) {
     __xhci_current_Pa = 0x1000000;
     uint8_t *memory_space_ptr = (uint8_t*)ctl->mmio_base_addr;
@@ -271,7 +267,6 @@ void ring_hc_doorbell(){
 }
 
 int xhci_slots_init() {
-    // ВОЗМОЖНО это должно быть так
     init_dev((void*)command_ring_deque, 0);
     volatile struct CommandCompletionEventTRB *trb = (volatile void*)command_ring_deque;
     cprintf("  > %lx %x %x\n",trb->command_trb_ptr,trb->command_completion_parameter,trb->flags);
@@ -336,9 +331,7 @@ int xhci_slots_init() {
     return 0;*/
 }
 
-/*
-place command trb to command ring
-*/
+/* place command trb to command ring */
 uint8_t* place_command(struct TRBTemplate trb){
     cprintf("place_command\n");
     trb.control = trb.control | pcs;
@@ -380,9 +373,7 @@ void reset_root_hub_port(int port_id){
     while (!(get_portsc(port_id) | PORTSC_PRC)){}
 }
 
-/*
-(4.3)
-*/
+/* (4.3) */
 void xhci_usb_device_init(){
     // int port_id = 4;
     // // uint32_t portsc = get_portsc(port_id);
@@ -399,11 +390,9 @@ void xhci_usb_device_init(){
     command_ring_test();
 }
 
-/*
-initialize all xhci registers and trb rings
-(4.2)
-*/
-void xhci_init() {
+/* initialize all xhci registers and trb rings: (4.2) */
+void
+xhci_init() {
     struct XhciController *ctl = &xhci;
     struct PciDevice *pcidevice = find_pci_dev(0x0C, 0x03);
     //int err;
@@ -416,7 +405,6 @@ void xhci_init() {
         panic("Unable to allocate XHCI structures\n");
 
     xhci_event_ring_init();
-    // ПРОДОЛЖИТЬ см nvme_init А ЛУЧШЕ дедовский usb
     xhci_settings_init();
 
     xhci_usb_device_init();
@@ -431,11 +419,9 @@ void
 umain(int argc, char **argv) {
     cprintf("***********************INIT USB***********************\n");
     // уже написана в fs/pci.c
-    //TO DO: исправить то что сделано в pmap.c
     // делаем похожей на nvme
     pci_init(argv);
     xhci_init();
     cprintf("***********************END USB***********************\n");
-    while(1){}
 }
 

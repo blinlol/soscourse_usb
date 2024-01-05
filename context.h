@@ -2,6 +2,9 @@
 В этом файле реализованы все структуры контекстов из пункта 6.2
 */
 
+#ifndef __CONTEXT_H__
+#define __CONTEXT_H__
+
 #define PACKED     __attribute__((packed))
 #define ALIGNED(n) __attribute__((aligned(n)))
 
@@ -150,15 +153,6 @@ struct InputContext {
     struct EndpointContext endpoint_context[31];
 };
 
-
-
-
-
-
-
-
-
-
 struct TransferTRB {
     volatile uint64_t trb_pointer;
 
@@ -180,3 +174,5 @@ struct AddressDeviceCommandTRB {
     volatile uint8_t reserved1;
     volatile uint8_t slot_id;
 };
+
+#endif

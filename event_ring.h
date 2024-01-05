@@ -1,7 +1,7 @@
-// NOT USED
+#ifndef __EVENT_RING_H__
+#define __EVENT_RING_H__
 
 #define PACKED __attribute__((packed))
-
 
 #define ERST_SIZE 1
 #define ERS_SIZE 32
@@ -13,3 +13,4 @@ struct EventRingSegment {
     uint16_t rsvdz1[3];
 } PACKED;
 
+#endif

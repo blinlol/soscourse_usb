@@ -2,6 +2,8 @@
 В этом файле описаны все регистры xHCI из пункта 5 спецификации
 */
 
+#ifndef __REGISTERS_H__
+#define __REGISTERS_H__
 
 #define PACKED     __attribute__((packed))
 #define ALIGNED(n) __attribute__((aligned(n)))
@@ -40,7 +42,6 @@ struct CapabilityRegisters {
 
 #define DBOFF_MASK  (~((uint32_t)0b11))
 #define RTSOFF_MASK (~((uint32_t)0b11))
-
 
 #define PORTSC_PR (1 << 4)
 #define PORTSC_PRC (1 << 21)
@@ -160,3 +161,5 @@ struct TRBTemplate {
     volatile uint32_t status;
     volatile uint32_t control;
 };
+
+#endif
